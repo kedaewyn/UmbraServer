@@ -32,7 +32,7 @@ public class DiscoveryNotifyController : Controller
     {
         if (string.IsNullOrEmpty(dto.TargetUid)) return BadRequest();
         var name = string.IsNullOrEmpty(dto.FromAlias) ? dto.FromUid : dto.FromAlias;
-        var msg = $"{name} wants to pair with you (Nearby)";
+        var msg = $"Nearby Request: {name} [{dto.FromUid}]";
         _logger.LogInformation("Discovery notify request to {target} from {from}", dto.TargetUid, name);
         await _hub.Clients.User(dto.TargetUid).Client_ReceiveServerMessage(MareSynchronos.API.Data.Enum.MessageSeverity.Information, msg);
         return Accepted();

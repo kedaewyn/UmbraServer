@@ -72,7 +72,7 @@ public class Startup
             a.FeatureProviders.Remove(a.FeatureProviders.OfType<ControllerFeatureProvider>().First());
             if (mareConfig.GetValue<Uri>(nameof(ServerConfiguration.MainServerAddress), defaultValue: null) == null)
             {
-                a.FeatureProviders.Add(new AllowedControllersFeatureProvider(typeof(MareServerConfigurationController), typeof(MareBaseConfigurationController), typeof(ClientMessageController), typeof(MainController)));
+                a.FeatureProviders.Add(new AllowedControllersFeatureProvider(typeof(MareServerConfigurationController), typeof(MareBaseConfigurationController), typeof(ClientMessageController), typeof(MainController), typeof(DiscoveryNotifyController)));
             }
             else
             {

@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using MareSynchronosAuthService.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace MareSynchronosAuthService.Controllers;
 
@@ -59,6 +60,7 @@ public class DiscoveryController : Controller
     public sealed class RequestDto
     {
         [JsonPropertyName("token")] public string Token { get; set; } = string.Empty;
+        [JsonPropertyName("displayName")] public string? DisplayName { get; set; }
     }
 
     [HttpPost("request")]
@@ -71,7 +73,9 @@ public class DiscoveryController : Controller
             try
             {
                 var fromUid = User?.Claims?.FirstOrDefault(c => c.Type == MareSynchronosShared.Utils.MareClaimTypes.Uid)?.Value ?? string.Empty;
-                var fromAlias = User?.Claims?.FirstOrDefault(c => c.Type == MareSynchronosShared.Utils.MareClaimTypes.Alias)?.Value ?? string.Empty;
+                var fromAlias = string.IsNullOrEmpty(req.DisplayName)
+                    ? (User?.Claims?.FirstOrDefault(c => c.Type == MareSynchronosShared.Utils.MareClaimTypes.Alias)?.Value ?? string.Empty)
+                    : req.DisplayName;
 
                 using var http = new HttpClient();
                 // Use same host as public (goes through nginx)
@@ -83,7 +87,12 @@ public class DiscoveryController : Controller
                 http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serverToken);
                 var payload = System.Text.Json.JsonSerializer.Serialize(new { targetUid, fromUid, fromAlias });
                 var resp = await http.PostAsync(url, new StringContent(payload, System.Text.Encoding.UTF8, "application/json"));
-                // ignore response content, just return Accepted to caller
+                if (!resp.IsSuccessStatusCode)
+                {
+                    var txt = await resp.Content.ReadAsStringAsync();
+                    HttpContext.RequestServices.GetRequiredService<ILogger<DiscoveryController>>()
+                        .LogWarning("notifyRequest failed: {code} {reason} {body}", (int)resp.StatusCode, resp.ReasonPhrase, txt);
+                }
             }
             catch { /* ignore */ }
 

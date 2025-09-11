@@ -85,6 +85,25 @@ public class Startup
         // Nearby discovery services (well-known + presence)
         services.AddSingleton<DiscoveryWellKnownProvider>();
         services.AddHostedService(p => p.GetRequiredService<DiscoveryWellKnownProvider>());
+
+        // Presence store selection
+        var discoveryStore = _configuration.GetValue<string>("NearbyDiscovery:Store") ?? "memory";
+        TimeSpan presenceTtl = TimeSpan.FromMinutes(_configuration.GetValue<int>("NearbyDiscovery:PresenceTtlMinutes", 5));
+        TimeSpan tokenTtl = TimeSpan.FromSeconds(_configuration.GetValue<int>("NearbyDiscovery:TokenTtlSeconds", 120));
+        if (string.Equals(discoveryStore, "redis", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<MareSynchronosAuthService.Services.Discovery.IDiscoveryPresenceStore>(sp =>
+            {
+                var logger = sp.GetRequiredService<ILogger<MareSynchronosAuthService.Services.Discovery.RedisPresenceStore>>();
+                var mux = sp.GetRequiredService<IConnectionMultiplexer>();
+                return new MareSynchronosAuthService.Services.Discovery.RedisPresenceStore(logger, mux, presenceTtl, tokenTtl);
+            });
+        }
+        else
+        {
+            services.AddSingleton<MareSynchronosAuthService.Services.Discovery.IDiscoveryPresenceStore>(sp => new MareSynchronosAuthService.Services.Discovery.InMemoryPresenceStore(presenceTtl, tokenTtl));
+        }
+
         services.AddSingleton<DiscoveryPresenceService>();
         services.AddHostedService(p => p.GetRequiredService<DiscoveryPresenceService>());
 
@@ -210,6 +229,8 @@ public class Startup
         };
 
         services.AddStackExchangeRedisExtensions<SystemTextJsonSerializer>(redisConfiguration);
+        // Also expose raw multiplexer for custom Redis usage (discovery presence)
+        services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(options));
     }
     private void ConfigureConfigServices(IServiceCollection services)
     {
