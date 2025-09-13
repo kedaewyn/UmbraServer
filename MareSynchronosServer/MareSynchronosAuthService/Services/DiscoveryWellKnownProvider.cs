@@ -12,6 +12,9 @@ public class DiscoveryWellKnownProvider : IHostedService
     private readonly object _lock = new();
     private byte[] _currentSalt = Array.Empty<byte>();
     private DateTimeOffset _currentSaltExpiresAt;
+    private byte[] _previousSalt = Array.Empty<byte>();
+    private DateTimeOffset _previousSaltExpiresAt;
+    private readonly TimeSpan _gracePeriod = TimeSpan.FromMinutes(5);
     private Timer? _rotationTimer;
     private readonly TimeSpan _saltTtl = TimeSpan.FromDays(30 * 6); 
     private readonly int _refreshSec = 86400; // 24h
@@ -48,16 +51,30 @@ public class DiscoveryWellKnownProvider : IHostedService
     {
         lock (_lock)
         {
+            if (_currentSalt.Length > 0)
+            {
+                _previousSalt = _currentSalt;
+                _previousSaltExpiresAt = DateTimeOffset.UtcNow.Add(_gracePeriod);
+            }
             _currentSalt = RandomNumberGenerator.GetBytes(32);
             _currentSaltExpiresAt = DateTimeOffset.UtcNow.Add(_saltTtl);
         }
     }
 
-    public bool IsExpired()
+    public bool IsExpired(string providedSaltB64)
     {
         lock (_lock)
         {
-            return DateTimeOffset.UtcNow > _currentSaltExpiresAt;
+            var now = DateTimeOffset.UtcNow;
+            var provided = Convert.FromBase64String(providedSaltB64);
+
+            if (_currentSalt.SequenceEqual(provided) && now <= _currentSaltExpiresAt)
+                return false;
+
+            if (_previousSalt.Length > 0 && _previousSalt.SequenceEqual(provided) && now <= _previousSaltExpiresAt)
+                return false;
+
+            return true;
         }
     }
 
@@ -87,11 +104,13 @@ public class DiscoveryWellKnownProvider : IHostedService
                 SaltB64 = Convert.ToBase64String(salt),
                 SaltExpiresAt = exp,
                 RefreshSec = _refreshSec,
+                GraceSec = (int)_gracePeriod.TotalSeconds,
                 Endpoints = new()
                 {
                     Publish = $"{httpScheme}://{host}/discovery/publish",
                     Query = $"{httpScheme}://{host}/discovery/query",
-                    Request = $"{httpScheme}://{host}/discovery/request"
+                    Request = $"{httpScheme}://{host}/discovery/request",
+                    Accept = $"{httpScheme}://{host}/discovery/acceptNotify"
                 },
                 Policies = new()
                 {
@@ -128,6 +147,7 @@ public class DiscoveryWellKnownProvider : IHostedService
         [JsonPropertyName("salt_b64")] public string SaltB64 { get; set; } = string.Empty;
         [JsonPropertyName("salt_expires_at")] public DateTimeOffset SaltExpiresAt { get; set; }
         [JsonPropertyName("refresh_sec")] public int RefreshSec { get; set; }
+        [JsonPropertyName("grace_sec")] public int GraceSec { get; set; }
         [JsonPropertyName("endpoints")] public Endpoints Endpoints { get; set; } = new();
         [JsonPropertyName("policies")] public Policies Policies { get; set; } = new();
     }
@@ -137,6 +157,7 @@ public class DiscoveryWellKnownProvider : IHostedService
         [JsonPropertyName("publish")] public string? Publish { get; set; }
         [JsonPropertyName("query")] public string? Query { get; set; }
         [JsonPropertyName("request")] public string? Request { get; set; }
+        [JsonPropertyName("accept")] public string? Accept { get; set; }
     }
 
     private sealed class Policies

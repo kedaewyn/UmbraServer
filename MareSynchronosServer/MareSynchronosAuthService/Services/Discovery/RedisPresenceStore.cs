@@ -24,8 +24,9 @@ public sealed class RedisPresenceStore : IDiscoveryPresenceStore
 
     private static string KeyForHash(string hash) => $"nd:hash:{hash}";
     private static string KeyForToken(string token) => $"nd:token:{token}";
+    private static string KeyForUidSet(string uid) => $"nd:uid:{uid}";
 
-    public void Publish(string uid, IEnumerable<string> hashes, string? displayName = null)
+    public void Publish(string uid, IEnumerable<string> hashes, string? displayName = null, bool allowRequests = true)
     {
         var entries = hashes.Distinct(StringComparer.Ordinal).ToArray();
         if (entries.Length == 0) return;
@@ -33,30 +34,85 @@ public sealed class RedisPresenceStore : IDiscoveryPresenceStore
         foreach (var h in entries)
         {
             var key = KeyForHash(h);
-            var payload = JsonSerializer.Serialize(new Presence(uid, displayName), _jsonOpts);
+            var payload = JsonSerializer.Serialize(new Presence(uid, displayName, allowRequests), _jsonOpts);
             batch.StringSetAsync(key, payload, _presenceTtl);
+            // Index this hash under the publisher uid for fast unpublish
+            batch.SetAddAsync(KeyForUidSet(uid), h);
+            batch.KeyExpireAsync(KeyForUidSet(uid), _presenceTtl);
         }
         batch.Execute();
         _logger.LogDebug("RedisPresenceStore: published {count} hashes", entries.Length);
     }
 
-    public (bool Found, string Token, string? DisplayName) TryMatchAndIssueToken(string requesterUid, string hash)
+    public void Unpublish(string uid)
+    {
+        try
+        {
+            var setKey = KeyForUidSet(uid);
+            var members = _db.SetMembers(setKey);
+            if (members is { Length: > 0 })
+            {
+                var batch = _db.CreateBatch();
+                foreach (var m in members)
+                {
+                    var hash = (string)m;
+                    var key = KeyForHash(hash);
+                    // Defensive: only delete if the hash is still owned by this uid
+                    var val = _db.StringGet(key);
+                    if (val.HasValue)
+                    {
+                        try
+                        {
+                            var p = JsonSerializer.Deserialize<Presence>(val!);
+                            if (p != null && string.Equals(p.Uid, uid, StringComparison.Ordinal))
+                            {
+                                batch.KeyDeleteAsync(key);
+                            }
+                        }
+                        catch { /* ignore corrupted */ }
+                    }
+                }
+                // Remove the uid index set itself
+                batch.KeyDeleteAsync(setKey);
+                batch.Execute();
+            }
+            else
+            {
+                // No index set: best-effort, just delete the set key in case it exists
+                _db.KeyDelete(setKey);
+            }
+            _logger.LogDebug("RedisPresenceStore: unpublished all hashes for uid {uid}", uid);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "RedisPresenceStore: Unpublish failed for uid {uid}", uid);
+        }
+    }
+
+    public (bool Found, string? Token, string TargetUid, string? DisplayName) TryMatchAndIssueToken(string requesterUid, string hash)
     {
         var key = KeyForHash(hash);
         var val = _db.StringGet(key);
-        if (!val.HasValue) return (false, string.Empty, null);
+        if (!val.HasValue) return (false, null, string.Empty, null);
         try
         {
             var p = JsonSerializer.Deserialize<Presence>(val!);
-            if (p == null || string.IsNullOrEmpty(p.Uid)) return (false, string.Empty, null);
-            if (string.Equals(p.Uid, requesterUid, StringComparison.Ordinal)) return (false, string.Empty, null);
+            if (p == null || string.IsNullOrEmpty(p.Uid)) return (false, null, string.Empty, null);
+            if (string.Equals(p.Uid, requesterUid, StringComparison.Ordinal)) return (false, null, string.Empty, null);
+
+            // Visible but requests disabled → return without token
+            if (!p.AllowRequests)
+            {
+                return (true, null, p.Uid, p.DisplayName);
+            }
+
             var token = Guid.NewGuid().ToString("N");
             _db.StringSet(KeyForToken(token), p.Uid, _tokenTtl);
-            return (true, token, p.DisplayName);
+            return (true, token, p.Uid, p.DisplayName);
         }
         catch
         {
-            return (false, string.Empty, null);
+            return (false, null, string.Empty, null);
         }
     }
 
@@ -70,6 +126,5 @@ public sealed class RedisPresenceStore : IDiscoveryPresenceStore
         return true;
     }
 
-    private sealed record Presence(string Uid, string? DisplayName);
+    private sealed record Presence(string Uid, string? DisplayName, bool AllowRequests);
 }
-

@@ -27,15 +27,22 @@ public class DiscoveryPresenceService : IHostedService, IDisposable
         return Task.CompletedTask;
     }
 
-    public void Publish(string uid, IEnumerable<string> hashes, string? displayName = null)
+    public void Publish(string uid, IEnumerable<string> hashes, string? displayName = null, bool allowRequests = true)
     {
-        _store.Publish(uid, hashes, displayName);
+        _store.Publish(uid, hashes, displayName, allowRequests);
         _logger.LogDebug("Discovery presence published for {uid} with {n} hashes", uid, hashes.Count());
     }
 
-    public (bool Found, string Token, string? DisplayName) TryMatchAndIssueToken(string requesterUid, string hash)
+    public void Unpublish(string uid)
     {
-        return _store.TryMatchAndIssueToken(requesterUid, hash);
+        _store.Unpublish(uid);
+        _logger.LogDebug("Discovery presence unpublished for {uid}", uid);
+    }
+
+    public (bool Found, string? Token, string TargetUid, string? DisplayName) TryMatchAndIssueToken(string requesterUid, string hash)
+    {
+        var res = _store.TryMatchAndIssueToken(requesterUid, hash);
+        return (res.Found, res.Token, res.TargetUid, res.DisplayName);
     }
 
     public bool ValidateToken(string token, out string targetUid)

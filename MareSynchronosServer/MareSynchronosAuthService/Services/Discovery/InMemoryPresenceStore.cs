@@ -4,7 +4,7 @@ namespace MareSynchronosAuthService.Services.Discovery;
 
 public sealed class InMemoryPresenceStore : IDiscoveryPresenceStore
 {
-    private readonly ConcurrentDictionary<string, (string Uid, DateTimeOffset ExpiresAt, string? DisplayName)> _presence = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (string Uid, DateTimeOffset ExpiresAt, string? DisplayName, bool AllowRequests)> _presence = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, (string TargetUid, DateTimeOffset ExpiresAt)> _tokens = new(StringComparer.Ordinal);
     private readonly TimeSpan _presenceTtl;
     private readonly TimeSpan _tokenTtl;
@@ -35,25 +35,43 @@ public sealed class InMemoryPresenceStore : IDiscoveryPresenceStore
         }
     }
 
-    public void Publish(string uid, IEnumerable<string> hashes, string? displayName = null)
+    public void Publish(string uid, IEnumerable<string> hashes, string? displayName = null, bool allowRequests = true)
     {
         var exp = DateTimeOffset.UtcNow.Add(_presenceTtl);
         foreach (var h in hashes.Distinct(StringComparer.Ordinal))
         {
-            _presence[h] = (uid, exp, displayName);
+            _presence[h] = (uid, exp, displayName, allowRequests);
         }
     }
 
-    public (bool Found, string Token, string? DisplayName) TryMatchAndIssueToken(string requesterUid, string hash)
+    public void Unpublish(string uid)
+    {
+        // Remove all presence hashes owned by this uid
+        foreach (var kv in _presence.ToArray())
+        {
+            if (string.Equals(kv.Value.Uid, uid, StringComparison.Ordinal))
+            {
+                _presence.TryRemove(kv.Key, out _);
+            }
+        }
+    }
+
+public (bool Found, string? Token, string TargetUid, string? DisplayName) TryMatchAndIssueToken(string requesterUid, string hash)
     {
         if (_presence.TryGetValue(hash, out var entry))
         {
-            if (string.Equals(entry.Uid, requesterUid, StringComparison.Ordinal)) return (false, string.Empty, null);
+            if (string.Equals(entry.Uid, requesterUid, StringComparison.Ordinal))
+                return (false, null, string.Empty, null);
+
+            // Visible but requests disabled → no token
+            if (!entry.AllowRequests)
+                return (true, null, entry.Uid, entry.DisplayName);
+
             var token = Guid.NewGuid().ToString("N");
             _tokens[token] = (entry.Uid, DateTimeOffset.UtcNow.Add(_tokenTtl));
-            return (true, token, entry.DisplayName);
+            return (true, token, entry.Uid, entry.DisplayName);
         }
-        return (false, string.Empty, null);
+        return (false, null, string.Empty, null);
     }
 
     public bool ValidateToken(string token, out string targetUid)

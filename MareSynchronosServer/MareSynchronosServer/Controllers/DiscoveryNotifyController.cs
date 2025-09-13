@@ -37,4 +37,22 @@ public class DiscoveryNotifyController : Controller
         await _hub.Clients.User(dto.TargetUid).Client_ReceiveServerMessage(MareSynchronos.API.Data.Enum.MessageSeverity.Information, msg);
         return Accepted();
     }
+
+    public sealed class NotifyAcceptDto
+    {
+        [JsonPropertyName("targetUid")] public string TargetUid { get; set; } = string.Empty;
+        [JsonPropertyName("fromUid")] public string FromUid { get; set; } = string.Empty;
+        [JsonPropertyName("fromAlias")] public string? FromAlias { get; set; }
+    }
+
+    [HttpPost("notifyAccept")]
+    public async Task<IActionResult> NotifyAccept([FromBody] NotifyAcceptDto dto)
+    {
+        if (string.IsNullOrEmpty(dto.TargetUid)) return BadRequest();
+        var name = string.IsNullOrEmpty(dto.FromAlias) ? dto.FromUid : dto.FromAlias;
+        var msg = $"Nearby Accept: {name} [{dto.FromUid}]";
+        _logger.LogInformation("Discovery notify accept to {target} from {from}", dto.TargetUid, name);
+        await _hub.Clients.User(dto.TargetUid).Client_ReceiveServerMessage(MareSynchronos.API.Data.Enum.MessageSeverity.Information, msg);
+        return Accepted();
+    }
 }

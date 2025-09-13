@@ -23,19 +23,21 @@ public class DiscoveryController : Controller
     public sealed class QueryRequest
     {
         [JsonPropertyName("hashes")] public string[] Hashes { get; set; } = Array.Empty<string>();
+        [JsonPropertyName("salt")] public string SaltB64 { get; set; } = string.Empty;
     }
 
     public sealed class QueryResponseEntry
     {
         [JsonPropertyName("hash")] public string Hash { get; set; } = string.Empty;
-        [JsonPropertyName("token")] public string Token { get; set; } = string.Empty;
+        [JsonPropertyName("token")] public string? Token { get; set; }
+        [JsonPropertyName("uid")] public string Uid { get; set; } = string.Empty;
         [JsonPropertyName("displayName")] public string? DisplayName { get; set; }
     }
 
     [HttpPost("query")]
     public IActionResult Query([FromBody] QueryRequest req)
     {
-        if (_provider.IsExpired())
+        if (_provider.IsExpired(req.SaltB64))
         {
             return BadRequest(new { code = "DISCOVERY_SALT_EXPIRED" });
         }
@@ -47,10 +49,10 @@ public class DiscoveryController : Controller
         List<QueryResponseEntry> matches = new();
         foreach (var h in req.Hashes.Distinct(StringComparer.Ordinal))
         {
-            var (found, token, displayName) = _presence.TryMatchAndIssueToken(uid, h);
+            var (found, token, targetUid, displayName) = _presence.TryMatchAndIssueToken(uid, h);
             if (found)
             {
-                matches.Add(new QueryResponseEntry { Hash = h, Token = token, DisplayName = displayName });
+                matches.Add(new QueryResponseEntry { Hash = h, Token = token, Uid = targetUid, DisplayName = displayName });
             }
         }
 
@@ -101,16 +103,64 @@ public class DiscoveryController : Controller
         return BadRequest(new { code = "INVALID_TOKEN" });
     }
 
+    public sealed class AcceptNotifyDto
+    {
+        [JsonPropertyName("targetUid")] public string TargetUid { get; set; } = string.Empty;
+        [JsonPropertyName("displayName")] public string? DisplayName { get; set; }
+    }
+
+    // Accept notification relay (sender -> auth -> main)
+    [HttpPost("acceptNotify")]
+    public async Task<IActionResult> AcceptNotify([FromBody] AcceptNotifyDto req)
+    {
+        if (string.IsNullOrEmpty(req.TargetUid)) return BadRequest();
+        try
+        {
+            var fromUid = User?.Claims?.FirstOrDefault(c => c.Type == MareSynchronosShared.Utils.MareClaimTypes.Uid)?.Value ?? string.Empty;
+            var fromAlias = string.IsNullOrEmpty(req.DisplayName)
+                ? (User?.Claims?.FirstOrDefault(c => c.Type == MareSynchronosShared.Utils.MareClaimTypes.Alias)?.Value ?? string.Empty)
+                : req.DisplayName;
+
+            using var http = new HttpClient();
+            var baseUrl = $"{Request.Scheme}://{Request.Host.Value}";
+            var url = new Uri(new Uri(baseUrl), "/main/discovery/notifyAccept");
+            var serverToken = HttpContext.RequestServices.GetRequiredService<MareSynchronosShared.Utils.ServerTokenGenerator>().Token;
+            http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serverToken);
+            var payload = System.Text.Json.JsonSerializer.Serialize(new { targetUid = req.TargetUid, fromUid, fromAlias });
+            var resp = await http.PostAsync(url, new StringContent(payload, System.Text.Encoding.UTF8, "application/json"));
+            if (!resp.IsSuccessStatusCode)
+            {
+                var txt = await resp.Content.ReadAsStringAsync();
+                HttpContext.RequestServices.GetRequiredService<ILogger<DiscoveryController>>()
+                    .LogWarning("notifyAccept failed: {code} {reason} {body}", (int)resp.StatusCode, resp.ReasonPhrase, txt);
+            }
+        }
+        catch { /* ignore */ }
+
+        return Accepted();
+    }
+
     public sealed class PublishRequest
     {
         [JsonPropertyName("hashes")] public string[] Hashes { get; set; } = Array.Empty<string>();
         [JsonPropertyName("displayName")] public string? DisplayName { get; set; }
+        [JsonPropertyName("salt")] public string SaltB64 { get; set; } = string.Empty;
+        [JsonPropertyName("allowRequests")] public bool AllowRequests { get; set; } = true;
+    }
+
+    [HttpPost("disable")]
+    public IActionResult Disable()
+    {
+        var uid = User?.Claims?.FirstOrDefault(c => c.Type == MareSynchronosShared.Utils.MareClaimTypes.Uid)?.Value ?? string.Empty;
+        if (string.IsNullOrEmpty(uid)) return Accepted();
+        _presence.Unpublish(uid);
+        return Accepted();
     }
 
     [HttpPost("publish")]
     public IActionResult Publish([FromBody] PublishRequest req)
     {
-        if (_provider.IsExpired())
+        if (_provider.IsExpired(req.SaltB64))
         {
             return BadRequest(new { code = "DISCOVERY_SALT_EXPIRED" });
         }
@@ -118,7 +168,7 @@ public class DiscoveryController : Controller
         if (string.IsNullOrEmpty(uid) || req?.Hashes == null || req.Hashes.Length == 0)
             return Accepted();
 
-        _presence.Publish(uid, req.Hashes, req.DisplayName);
+        _presence.Publish(uid, req.Hashes, req.DisplayName, req.AllowRequests);
         return Accepted();
     }
 }
