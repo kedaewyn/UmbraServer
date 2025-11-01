@@ -51,6 +51,9 @@ public class MareDbContext : DbContext
     public DbSet<CharaDataOriginalFile> CharaDataOriginalFiles { get; set; }
     public DbSet<CharaDataPose> CharaDataPoses { get; set; }
     public DbSet<CharaDataAllowance> CharaDataAllowances { get; set; }
+    public DbSet<McdfShare> McdfShares { get; set; }
+    public DbSet<McdfShareAllowedUser> McdfShareAllowedUsers { get; set; }
+    public DbSet<McdfShareAllowedGroup> McdfShareAllowedGroups { get; set; }
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -127,5 +130,28 @@ public class MareDbContext : DbContext
         mb.Entity<CharaDataAllowance>().HasIndex(c => c.ParentId);
         mb.Entity<CharaDataAllowance>().HasOne(u => u.AllowedGroup).WithMany().HasForeignKey(u => u.AllowedGroupGID).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<CharaDataAllowance>().HasOne(u => u.AllowedUser).WithMany().HasForeignKey(u => u.AllowedUserUID).OnDelete(DeleteBehavior.Cascade);
+
+        mb.Entity<McdfShare>().ToTable("mcdf_shares");
+        mb.Entity<McdfShare>().HasIndex(s => s.OwnerUID);
+        mb.Entity<McdfShare>().HasOne(s => s.Owner).WithMany().HasForeignKey(s => s.OwnerUID).OnDelete(DeleteBehavior.Cascade);
+        mb.Entity<McdfShare>().Property(s => s.Description).HasColumnType("text");
+        mb.Entity<McdfShare>().Property(s => s.CipherData).HasColumnType("bytea");
+        mb.Entity<McdfShare>().Property(s => s.Nonce).HasColumnType("bytea");
+        mb.Entity<McdfShare>().Property(s => s.Salt).HasColumnType("bytea");
+        mb.Entity<McdfShare>().Property(s => s.Tag).HasColumnType("bytea");
+        mb.Entity<McdfShare>().Property(s => s.CreatedUtc).HasColumnType("timestamp with time zone");
+        mb.Entity<McdfShare>().Property(s => s.UpdatedUtc).HasColumnType("timestamp with time zone");
+        mb.Entity<McdfShare>().Property(s => s.ExpiresAtUtc).HasColumnType("timestamp with time zone");
+        mb.Entity<McdfShare>().Property(s => s.DownloadCount).HasColumnType("integer");
+        mb.Entity<McdfShare>().HasMany(s => s.AllowedIndividuals).WithOne(a => a.Share).HasForeignKey(a => a.ShareId).OnDelete(DeleteBehavior.Cascade);
+        mb.Entity<McdfShare>().HasMany(s => s.AllowedSyncshells).WithOne(a => a.Share).HasForeignKey(a => a.ShareId).OnDelete(DeleteBehavior.Cascade);
+
+        mb.Entity<McdfShareAllowedUser>().ToTable("mcdf_share_allowed_users");
+        mb.Entity<McdfShareAllowedUser>().HasKey(u => new { u.ShareId, u.AllowedIndividualUid });
+        mb.Entity<McdfShareAllowedUser>().HasIndex(u => u.AllowedIndividualUid);
+
+        mb.Entity<McdfShareAllowedGroup>().ToTable("mcdf_share_allowed_groups");
+        mb.Entity<McdfShareAllowedGroup>().HasKey(g => new { g.ShareId, g.AllowedGroupGid });
+        mb.Entity<McdfShareAllowedGroup>().HasIndex(g => g.AllowedGroupGid);
     }
 }

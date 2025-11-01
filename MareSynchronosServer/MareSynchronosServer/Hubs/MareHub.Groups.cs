@@ -148,6 +148,8 @@ public partial class MareHub
         {
             IsTemporary = group.IsTemporary,
             ExpiresAt = group.ExpiresAt,
+            AutoDetectVisible = group.AutoDetectVisible,
+            PasswordTemporarilyDisabled = group.PasswordTemporarilyDisabled,
         }).ConfigureAwait(false);
     }
 
@@ -274,6 +276,8 @@ public partial class MareHub
         {
             IsTemporary = newGroup.IsTemporary,
             ExpiresAt = newGroup.ExpiresAt,
+            AutoDetectVisible = newGroup.AutoDetectVisible,
+            PasswordTemporarilyDisabled = newGroup.PasswordTemporarilyDisabled,
         }).ConfigureAwait(false);
 
         _logger.LogCallInfo(MareHubLogger.Args(gid));
@@ -353,6 +357,8 @@ public partial class MareHub
         {
             IsTemporary = newGroup.IsTemporary,
             ExpiresAt = newGroup.ExpiresAt,
+            AutoDetectVisible = newGroup.AutoDetectVisible,
+            PasswordTemporarilyDisabled = newGroup.PasswordTemporarilyDisabled,
         }).ConfigureAwait(false);
 
         _logger.LogCallInfo(MareHubLogger.Args(gid, "Temporary", expiresAtUtc));
@@ -449,22 +455,130 @@ public partial class MareHub
         _logger.LogCallInfo(MareHubLogger.Args(dto.Group));
 
         var group = await DbContext.Groups.Include(g => g.Owner).AsNoTracking().SingleOrDefaultAsync(g => g.GID == aliasOrGid || g.Alias == aliasOrGid).ConfigureAwait(false);
-        var groupGid = group?.GID ?? string.Empty;
-        var existingPair = await DbContext.GroupPairs.AsNoTracking().SingleOrDefaultAsync(g => g.GroupGID == groupGid && g.GroupUserUID == UserUID).ConfigureAwait(false);
         var hashedPw = StringUtils.Sha256String(dto.Password);
+
+        return await JoinGroupInternal(group, aliasOrGid, hashedPw, allowPasswordless: false, skipInviteCheck: false).ConfigureAwait(false);
+    }
+
+    [Authorize(Policy = "Identified")]
+    public async Task<bool> SyncshellDiscoveryJoin(GroupDto dto)
+    {
+        var gid = dto.Group.GID.Trim();
+
+        _logger.LogCallInfo(MareHubLogger.Args(dto.Group));
+
+        var group = await DbContext.Groups.Include(g => g.Owner).AsNoTracking().SingleOrDefaultAsync(g => g.GID == gid).ConfigureAwait(false);
+
+        return await JoinGroupInternal(group, gid, hashedPassword: null, allowPasswordless: true, skipInviteCheck: true).ConfigureAwait(false);
+    }
+
+    [Authorize(Policy = "Identified")]
+    public async Task<List<SyncshellDiscoveryEntryDto>> SyncshellDiscoveryList()
+    {
+        _logger.LogCallInfo();
+
+        var groups = await DbContext.Groups.AsNoTracking()
+            .Include(g => g.Owner)
+            .Where(g => g.AutoDetectVisible && (!g.IsTemporary || g.ExpiresAt == null || g.ExpiresAt > DateTime.UtcNow))
+            .ToListAsync().ConfigureAwait(false);
+
+        var groupIds = groups.Select(g => g.GID).ToArray();
+        var memberCounts = await DbContext.GroupPairs.AsNoTracking()
+            .Where(p => groupIds.Contains(p.GroupGID))
+            .GroupBy(p => p.GroupGID)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(k => k.Key, k => k.Count, StringComparer.OrdinalIgnoreCase)
+            .ConfigureAwait(false);
+
+        return groups.Select(g => new SyncshellDiscoveryEntryDto
+        {
+            GID = g.GID,
+            Alias = g.Alias,
+            OwnerUID = g.OwnerUID,
+            OwnerAlias = g.Owner.Alias,
+            MemberCount = memberCounts.TryGetValue(g.GID, out var count) ? count : 0,
+            AutoAcceptPairs = g.InvitesEnabled,
+            Description = null,
+        }).ToList();
+    }
+
+    [Authorize(Policy = "Identified")]
+    public async Task<SyncshellDiscoveryStateDto?> SyncshellDiscoveryGetState(GroupDto dto)
+    {
+        _logger.LogCallInfo(MareHubLogger.Args(dto.Group));
+
+        var (hasRights, group) = await TryValidateGroupModeratorOrOwner(dto.Group.GID).ConfigureAwait(false);
+        if (!hasRights) return null;
+
+        return new SyncshellDiscoveryStateDto
+        {
+            GID = group.GID,
+            AutoDetectVisible = group.AutoDetectVisible,
+            PasswordTemporarilyDisabled = group.PasswordTemporarilyDisabled,
+        };
+    }
+
+    [Authorize(Policy = "Identified")]
+    public async Task<bool> SyncshellDiscoverySetVisibility(SyncshellDiscoveryVisibilityRequestDto dto)
+    {
+        _logger.LogCallInfo(MareHubLogger.Args(dto));
+
+        var (hasRights, group) = await TryValidateGroupModeratorOrOwner(dto.GID).ConfigureAwait(false);
+        if (!hasRights) return false;
+
+        group.AutoDetectVisible = dto.AutoDetectVisible;
+        group.PasswordTemporarilyDisabled = dto.AutoDetectVisible;
+
+        await DbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        await DbContext.Entry(group).Reference(g => g.Owner).LoadAsync().ConfigureAwait(false);
+
+        var groupPairs = await DbContext.GroupPairs.AsNoTracking().Where(p => p.GroupGID == group.GID).Select(p => p.GroupUserUID).ToListAsync().ConfigureAwait(false);
+        await Clients.Users(groupPairs).Client_GroupSendInfo(new GroupInfoDto(group.ToGroupData(), group.Owner.ToUserData(), group.GetGroupPermissions())
+        {
+            IsTemporary = group.IsTemporary,
+            ExpiresAt = group.ExpiresAt,
+            AutoDetectVisible = group.AutoDetectVisible,
+            PasswordTemporarilyDisabled = group.PasswordTemporarilyDisabled,
+        }).ConfigureAwait(false);
+
+        return true;
+    }
+
+    private async Task<bool> JoinGroupInternal(Group? group, string aliasOrGid, string? hashedPassword, bool allowPasswordless, bool skipInviteCheck)
+    {
+        if (group == null) return false;
+
+        var groupGid = group.GID;
+        var existingPair = await DbContext.GroupPairs.AsNoTracking().SingleOrDefaultAsync(g => g.GroupGID == groupGid && g.GroupUserUID == UserUID).ConfigureAwait(false);
         var existingUserCount = await DbContext.GroupPairs.AsNoTracking().CountAsync(g => g.GroupGID == groupGid).ConfigureAwait(false);
         var joinedGroups = await DbContext.GroupPairs.CountAsync(g => g.GroupUserUID == UserUID).ConfigureAwait(false);
         var isBanned = await DbContext.GroupBans.AnyAsync(g => g.GroupGID == groupGid && g.BannedUserUID == UserUID).ConfigureAwait(false);
-        var oneTimeInvite = await DbContext.GroupTempInvites.SingleOrDefaultAsync(g => g.GroupGID == groupGid && g.Invite == hashedPw).ConfigureAwait(false);
 
-        if (group == null
-            || (!string.Equals(group.HashedPassword, hashedPw, StringComparison.Ordinal) && oneTimeInvite == null)
+        GroupTempInvite? oneTimeInvite = null;
+        if (!string.IsNullOrEmpty(hashedPassword))
+        {
+            oneTimeInvite = await DbContext.GroupTempInvites.SingleOrDefaultAsync(g => g.GroupGID == groupGid && g.Invite == hashedPassword).ConfigureAwait(false);
+        }
+
+        if (allowPasswordless && !group.AutoDetectVisible)
+        {
+            return false;
+        }
+
+        bool passwordBypass = group.PasswordTemporarilyDisabled || allowPasswordless;
+        bool passwordMatches = !string.IsNullOrEmpty(hashedPassword) && string.Equals(group.HashedPassword, hashedPassword, StringComparison.Ordinal);
+        bool hasValidCredential = passwordBypass || passwordMatches || oneTimeInvite != null;
+
+        if (!hasValidCredential
             || existingPair != null
             || existingUserCount >= _maxGroupUserCount
-            || !group.InvitesEnabled
+            || (!skipInviteCheck && !group.InvitesEnabled)
             || joinedGroups >= _maxJoinedGroupsByUser
             || isBanned)
+        {
             return false;
+        }
 
         if (oneTimeInvite != null)
         {
@@ -486,13 +600,17 @@ public partial class MareHub
 
         _logger.LogCallInfo(MareHubLogger.Args(aliasOrGid, "Success"));
 
-        await Clients.User(UserUID).Client_GroupSendFullInfo(new GroupFullInfoDto(group.ToGroupData(), group.Owner.ToUserData(), group.GetGroupPermissions(), newPair.GetGroupPairPermissions(), newPair.GetGroupPairUserInfo())
+        var owner = group.Owner ?? await DbContext.Users.AsNoTracking().SingleAsync(u => u.UID == group.OwnerUID).ConfigureAwait(false);
+
+        await Clients.User(UserUID).Client_GroupSendFullInfo(new GroupFullInfoDto(group.ToGroupData(), owner.ToUserData(), group.GetGroupPermissions(), newPair.GetGroupPairPermissions(), newPair.GetGroupPairUserInfo())
         {
             IsTemporary = group.IsTemporary,
             ExpiresAt = group.ExpiresAt,
+            AutoDetectVisible = group.AutoDetectVisible,
+            PasswordTemporarilyDisabled = group.PasswordTemporarilyDisabled,
         }).ConfigureAwait(false);
 
-        var self = DbContext.Users.Single(u => u.UID == UserUID);
+        var self = await DbContext.Users.SingleAsync(u => u.UID == UserUID).ConfigureAwait(false);
 
         var groupPairs = await DbContext.GroupPairs.Include(p => p.GroupUser).Where(p => p.GroupGID == group.GID && p.GroupUserUID != UserUID).ToListAsync().ConfigureAwait(false);
 
@@ -646,6 +764,8 @@ public partial class MareHub
         {
             IsTemporary = g.Group.IsTemporary,
             ExpiresAt = g.Group.ExpiresAt,
+            AutoDetectVisible = g.Group.AutoDetectVisible,
+            PasswordTemporarilyDisabled = g.Group.PasswordTemporarilyDisabled,
         }).ToList();
     }
 

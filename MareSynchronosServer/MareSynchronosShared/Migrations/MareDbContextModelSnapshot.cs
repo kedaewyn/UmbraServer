@@ -454,6 +454,10 @@ namespace MareSynchronosServer.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("disable_vfx");
 
+                    b.Property<bool>("AutoDetectVisible")
+                        .HasColumnType("boolean")
+                        .HasColumnName("auto_detect_visible");
+
                     b.Property<string>("HashedPassword")
                         .HasColumnType("text")
                         .HasColumnName("hashed_password");
@@ -462,9 +466,21 @@ namespace MareSynchronosServer.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("is_temporary");
 
+                    b.Property<bool>("PasswordTemporarilyDisabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("password_temporarily_disabled");
+
                     b.Property<bool>("InvitesEnabled")
                         .HasColumnType("boolean")
                         .HasColumnName("invites_enabled");
+
+                    b.Property<bool>("AutoDetectVisible")
+                        .HasColumnType("boolean")
+                        .HasColumnName("auto_detect_visible");
+
+                    b.Property<bool>("PasswordTemporarilyDisabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("password_temporarily_disabled");
 
                     b.Property<string>("OwnerUID")
                         .HasColumnType("character varying(10)")
@@ -477,6 +493,99 @@ namespace MareSynchronosServer.Migrations
                         .HasDatabaseName("ix_groups_owner_uid");
 
                     b.ToTable("groups", (string)null);
+                });
+
+            modelBuilder.Entity("MareSynchronosShared.Models.McdfShare", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<byte[]>("CipherData")
+                        .HasColumnType("bytea")
+                        .HasColumnName("cipher_data");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_utc");
+
+                    b.Property<int>("DownloadCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("download_count");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<DateTime?>("ExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at_utc");
+
+                    b.Property<byte[]>("Nonce")
+                        .HasColumnType("bytea")
+                        .HasColumnName("nonce");
+
+                    b.Property<string>("OwnerUID")
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("owner_uid");
+
+                    b.Property<byte[]>("Salt")
+                        .HasColumnType("bytea")
+                        .HasColumnName("salt");
+
+                    b.Property<byte[]>("Tag")
+                        .HasColumnType("bytea")
+                        .HasColumnName("tag");
+
+                    b.Property<DateTime?>("UpdatedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mcdf_shares");
+
+                    b.HasIndex("OwnerUID")
+                        .HasDatabaseName("ix_mcdf_shares_owner_uid");
+
+                    b.ToTable("mcdf_shares", (string)null);
+                });
+
+            modelBuilder.Entity("MareSynchronosShared.Models.McdfShareAllowedGroup", b =>
+                {
+                    b.Property<Guid>("ShareId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("share_id");
+
+                    b.Property<string>("AllowedGroupGid")
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("allowed_group_gid");
+
+                    b.HasKey("ShareId", "AllowedGroupGid")
+                        .HasName("pk_mcdf_share_allowed_groups");
+
+                    b.HasIndex("AllowedGroupGid")
+                        .HasDatabaseName("ix_mcdf_share_allowed_groups_allowed_group_gid");
+
+                    b.ToTable("mcdf_share_allowed_groups", (string)null);
+                });
+
+            modelBuilder.Entity("MareSynchronosShared.Models.McdfShareAllowedUser", b =>
+                {
+                    b.Property<Guid>("ShareId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("share_id");
+
+                    b.Property<string>("AllowedIndividualUid")
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("allowed_individual_uid");
+
+                    b.HasKey("ShareId", "AllowedIndividualUid")
+                        .HasName("pk_mcdf_share_allowed_users");
+
+                    b.HasIndex("AllowedIndividualUid")
+                        .HasDatabaseName("ix_mcdf_share_allowed_users_allowed_individual_uid");
+
+                    b.ToTable("mcdf_share_allowed_users", (string)null);
                 });
 
             modelBuilder.Entity("MareSynchronosShared.Models.GroupBan", b =>
@@ -745,6 +854,13 @@ namespace MareSynchronosServer.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("MareSynchronosShared.Models.McdfShare", b =>
+                {
+                    b.Navigation("AllowedIndividuals");
+
+                    b.Navigation("AllowedSyncshells");
+                });
+
             modelBuilder.Entity("MareSynchronosShared.Models.CharaData", b =>
                 {
                     b.HasOne("MareSynchronosShared.Models.User", "Uploader")
@@ -941,6 +1057,42 @@ namespace MareSynchronosServer.Migrations
                         .HasConstraintName("fk_group_temp_invites_groups_group_gid");
 
                     b.Navigation("Group");
+                });
+
+            modelBuilder.Entity("MareSynchronosShared.Models.McdfShare", b =>
+                {
+                    b.HasOne("MareSynchronosShared.Models.User", "Owner")
+                        .WithMany()
+                        .HasForeignKey("OwnerUID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_mcdf_shares_users_owner_uid");
+
+                    b.Navigation("Owner");
+                });
+
+            modelBuilder.Entity("MareSynchronosShared.Models.McdfShareAllowedGroup", b =>
+                {
+                    b.HasOne("MareSynchronosShared.Models.McdfShare", "Share")
+                        .WithMany("AllowedSyncshells")
+                        .HasForeignKey("ShareId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_mcdf_share_allowed_groups_mcdf_shares_share_id");
+
+                    b.Navigation("Share");
+                });
+
+            modelBuilder.Entity("MareSynchronosShared.Models.McdfShareAllowedUser", b =>
+                {
+                    b.HasOne("MareSynchronosShared.Models.McdfShare", "Share")
+                        .WithMany("AllowedIndividuals")
+                        .HasForeignKey("ShareId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_mcdf_share_allowed_users_mcdf_shares_share_id");
+
+                    b.Navigation("Share");
                 });
 
             modelBuilder.Entity("MareSynchronosShared.Models.LodeStoneAuth", b =>

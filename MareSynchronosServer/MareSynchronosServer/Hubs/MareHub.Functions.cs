@@ -263,6 +263,8 @@ public partial class MareHub
                     {
                         IsTemporary = group.IsTemporary,
                         ExpiresAt = group.ExpiresAt,
+                        AutoDetectVisible = group.AutoDetectVisible,
+                        PasswordTemporarilyDisabled = group.PasswordTemporarilyDisabled,
                     }).ConfigureAwait(false);
                 }
                 else

@@ -19,4 +19,6 @@ public class Group
     public bool DisableVFX { get; set; }
     public bool IsTemporary { get; set; }
     public DateTime? ExpiresAt { get; set; }
+    public bool AutoDetectVisible { get; set; }
+    public bool PasswordTemporarilyDisabled { get; set; }
 }
