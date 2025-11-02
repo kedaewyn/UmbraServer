@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -23,8 +23,8 @@ namespace MareSynchronosServer.Migrations
                     salt = table.Column<byte[]>(type: "bytea", nullable: false),
                     tag = table.Column<byte[]>(type: "bytea", nullable: false),
                     created_utc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    updated_utc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    expires_at_utc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    updated_utc = table.Column<DateTime?>(type: "timestamp with time zone", nullable: true),
+                    expires_at_utc = table.Column<DateTime?>(type: "timestamp with time zone", nullable: true),
                     download_count = table.Column<int>(type: "integer", nullable: false)
                 },
                 constraints: table =>
