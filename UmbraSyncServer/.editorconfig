@@ -1,0 +1,7 @@
+﻿[*.cs]
+
+# MA0048: File name must match type name
+dotnet_diagnostic.MA0048.severity = suggestion
+
+[**/Migrations/*.cs]
+dotnet_diagnostic.MA0051.severity = none
