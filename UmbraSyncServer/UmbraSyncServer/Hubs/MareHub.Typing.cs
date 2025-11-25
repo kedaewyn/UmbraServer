@@ -13,12 +13,6 @@ namespace MareSynchronosServer.Hubs;
 public partial class MareHub
 {
     [Authorize(Policy = "Identified")]
-    public Task UserSetTypingState(bool isTyping)
-    {
-        return UserSetTypingState(isTyping, TypingScope.Unknown);
-    }
-
-    [Authorize(Policy = "Identified")]
     public async Task UserSetTypingState(bool isTyping, TypingScope scope)
     {
         _logger.LogCallInfo(MareHubLogger.Args(isTyping, scope));
