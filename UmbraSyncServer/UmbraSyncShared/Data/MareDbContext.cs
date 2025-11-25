@@ -19,7 +19,7 @@ public class MareDbContext : DbContext
         optionsBuilder.UseNpgsql("Host=localhost;Port=5432;Database=mare;Username=postgres", builder =>
         {
             builder.MigrationsHistoryTable("_efmigrationshistory", "public");
-            builder.MigrationsAssembly("MareSynchronosShared");
+            builder.MigrationsAssembly("UmbraSyncShared");
         }).UseSnakeCaseNamingConvention();
         optionsBuilder.EnableThreadSafetyChecks(false);
 
@@ -41,6 +41,7 @@ public class MareDbContext : DbContext
     public DbSet<GroupPair> GroupPairs { get; set; }
     public DbSet<Group> Groups { get; set; }
     public DbSet<GroupTempInvite> GroupTempInvites { get; set; }
+    public DbSet<AutoDetectSchedule> AutoDetectSchedules { get; set; }
     public DbSet<LodeStoneAuth> LodeStoneAuth { get; set; }
     public DbSet<UserProfileData> UserProfileData { get; set; }
     public DbSet<UserProfileDataReport> UserProfileReports { get; set; }
@@ -84,6 +85,9 @@ public class MareDbContext : DbContext
     {
         mb.Entity<Group>().ToTable("groups");
         mb.Entity<Group>().HasIndex(c => c.OwnerUID);
+        mb.Entity<AutoDetectSchedule>().ToTable("autodetect_schedules");
+        mb.Entity<AutoDetectSchedule>().HasKey(s => s.GroupGID);
+        mb.Entity<AutoDetectSchedule>().HasOne<Group>().WithOne().HasForeignKey<AutoDetectSchedule>(s => s.GroupGID).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<GroupPair>().ToTable("group_pairs");
         mb.Entity<GroupPair>().HasKey(u => new { u.GroupGID, u.GroupUserUID });
         mb.Entity<GroupPair>().HasIndex(c => c.GroupUserUID);

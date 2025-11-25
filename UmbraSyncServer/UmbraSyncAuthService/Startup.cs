@@ -246,7 +246,7 @@ public class Startup
             options.UseNpgsql(_configuration.GetConnectionString("DefaultConnection"), builder =>
             {
                 builder.MigrationsHistoryTable("_efmigrationshistory", "public");
-                builder.MigrationsAssembly("MareSynchronosShared");
+                builder.MigrationsAssembly("UmbraSyncShared");
             }).UseSnakeCaseNamingConvention();
             options.EnableThreadSafetyChecks(false);
         }, mareConfig.GetValue(nameof(MareConfigurationBase.DbContextPoolSize), 1024));
@@ -255,7 +255,7 @@ public class Startup
             options.UseNpgsql(_configuration.GetConnectionString("DefaultConnection"), builder =>
             {
                 builder.MigrationsHistoryTable("_efmigrationshistory", "public");
-                builder.MigrationsAssembly("MareSynchronosShared");
+                builder.MigrationsAssembly("UmbraSyncShared");
             }).UseSnakeCaseNamingConvention();
             options.EnableThreadSafetyChecks(false);
         });

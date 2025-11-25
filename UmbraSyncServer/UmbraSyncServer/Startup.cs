@@ -19,6 +19,7 @@ using StackExchange.Redis.Extensions.Core.Configuration;
 using System.Net;
 using StackExchange.Redis.Extensions.System.Text.Json;
 using UmbraSync.API.SignalR;
+using MareSynchronosServer.Services.AutoDetect;
 using MessagePack;
 using MessagePack.Resolvers;
 using Microsoft.AspNetCore.Mvc.Controllers;
@@ -96,15 +97,18 @@ public class Startup
 
         if (isMainServer)
         {
-            services.AddSingleton<UserCleanupService>();
-            services.AddHostedService(provider => provider.GetService<UserCleanupService>());
-            services.AddSingleton<CharaDataCleanupService>();
-            services.AddHostedService(provider => provider.GetService<CharaDataCleanupService>());
-        }
-
-        services.AddSingleton<GPoseLobbyDistributionService>();
-        services.AddHostedService(provider => provider.GetService<GPoseLobbyDistributionService>());
+        services.AddSingleton<UserCleanupService>();
+        services.AddHostedService(provider => provider.GetService<UserCleanupService>());
+        services.AddSingleton<CharaDataCleanupService>();
+        services.AddHostedService(provider => provider.GetService<CharaDataCleanupService>());
     }
+
+    services.AddSingleton<GPoseLobbyDistributionService>();
+    services.AddHostedService(provider => provider.GetService<GPoseLobbyDistributionService>());
+    services.AddSingleton(TimeProvider.System);
+    services.AddSingleton<AutoDetectScheduleCache>();
+    services.AddHostedService<AutoDetectScheduleService>();
+}
 
     private static void ConfigureSignalR(IServiceCollection services, IConfigurationSection mareConfig)
     {
@@ -256,7 +260,7 @@ public class Startup
             options.UseNpgsql(Configuration.GetConnectionString("DefaultConnection"), builder =>
             {
                 builder.MigrationsHistoryTable("_efmigrationshistory", "public");
-                builder.MigrationsAssembly("MareSynchronosShared");
+                builder.MigrationsAssembly("UmbraSyncShared");
             }).UseSnakeCaseNamingConvention();
             options.EnableThreadSafetyChecks(false);
         }, mareConfig.GetValue(nameof(MareConfigurationBase.DbContextPoolSize), 1024));
@@ -265,7 +269,7 @@ public class Startup
             options.UseNpgsql(Configuration.GetConnectionString("DefaultConnection"), builder =>
             {
                 builder.MigrationsHistoryTable("_efmigrationshistory", "public");
-                builder.MigrationsAssembly("MareSynchronosShared");
+                builder.MigrationsAssembly("UmbraSyncShared");
             }).UseSnakeCaseNamingConvention();
             options.EnableThreadSafetyChecks(false);
         });

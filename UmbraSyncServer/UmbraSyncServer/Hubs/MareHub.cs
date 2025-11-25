@@ -3,6 +3,7 @@ using UmbraSync.API.Data.Enum;
 using UmbraSync.API.Dto;
 using UmbraSync.API.SignalR;
 using MareSynchronosServer.Services;
+using MareSynchronosServer.Services.AutoDetect;
 using MareSynchronosServer.Utils;
 using MareSynchronosShared;
 using MareSynchronosShared.Data;
@@ -32,6 +33,7 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
     private readonly Uri _fileServerAddress;
     private readonly Version _expectedClientVersion;
     private readonly int _maxCharaDataByUser;
+    private readonly AutoDetectScheduleCache _autoDetectScheduleCache;
 
     private readonly Lazy<MareDbContext> _dbContextLazy;
     private MareDbContext DbContext => _dbContextLazy.Value;
@@ -39,7 +41,8 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
     public MareHub(MareMetrics mareMetrics,
         IDbContextFactory<MareDbContext> mareDbContextFactory, ILogger<MareHub> logger, SystemInfoService systemInfoService,
         IConfigurationService<ServerConfiguration> configuration, IHttpContextAccessor contextAccessor,
-        IRedisDatabase redisDb, GPoseLobbyDistributionService gPoseLobbyDistributionService)
+        IRedisDatabase redisDb, GPoseLobbyDistributionService gPoseLobbyDistributionService,
+        AutoDetectScheduleCache autoDetectScheduleCache)
     {
         _mareMetrics = mareMetrics;
         _systemInfoService = systemInfoService;
@@ -53,6 +56,7 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
         _contextAccessor = contextAccessor;
         _redis = redisDb;
         _gPoseLobbyDistributionService = gPoseLobbyDistributionService;
+        _autoDetectScheduleCache = autoDetectScheduleCache;
         _logger = new MareHubLogger(this, logger);
         _dbContextLazy = new Lazy<MareDbContext>(() => mareDbContextFactory.CreateDbContext());
     }

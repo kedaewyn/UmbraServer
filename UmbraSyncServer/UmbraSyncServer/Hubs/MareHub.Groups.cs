@@ -9,7 +9,9 @@ using MareSynchronosShared.Utils;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
 using System.Security.Cryptography;
+using MareSynchronosServer.Services.AutoDetect;
 
 namespace MareSynchronosServer.Hubs;
 
@@ -167,6 +169,34 @@ public partial class MareHub
         await DbContext.SaveChangesAsync().ConfigureAwait(false);
 
         return true;
+    }
+
+    private static int? SanitizeDisplayDuration(int? displayDurationHours)
+    {
+        if (!displayDurationHours.HasValue) return null;
+        return Math.Clamp(displayDurationHours.Value, 1, 240);
+    }
+
+    private static int[]? SanitizeWeekdays(int[]? activeWeekdays)
+    {
+        if (activeWeekdays == null) return null;
+
+        var sanitized = activeWeekdays
+            .Where(d => d >= 0 && d <= 6)
+            .Distinct()
+            .OrderBy(d => d)
+            .ToArray();
+
+        return sanitized.Length == 0 ? Array.Empty<int>() : sanitized;
+    }
+
+    private static string? ParseLocalTime(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (!TimeSpan.TryParse(value, CultureInfo.InvariantCulture, out var parsed)) return null;
+        if (parsed < TimeSpan.Zero || parsed >= TimeSpan.FromDays(1)) return null;
+
+        return new TimeSpan(parsed.Hours, parsed.Minutes, 0).ToString(@"hh\:mm", CultureInfo.InvariantCulture);
     }
 
     [Authorize(Policy = "Identified")]
@@ -477,10 +507,37 @@ public partial class MareHub
     {
         _logger.LogCallInfo();
 
-        var groups = await DbContext.Groups.AsNoTracking()
+        var groups = await DbContext.Groups
             .Include(g => g.Owner)
             .Where(g => g.AutoDetectVisible && (!g.IsTemporary || g.ExpiresAt == null || g.ExpiresAt > DateTime.UtcNow))
             .ToListAsync().ConfigureAwait(false);
+
+        // Enforce schedule gating at query time to avoid showing shells outside their window
+        bool changed = false;
+        foreach (var g in groups.ToList())
+        {
+            var schedule = _autoDetectScheduleCache.Get(g.GID);
+            if (schedule == null) continue;
+
+            var desired = AutoDetectScheduleEvaluator.EvaluateDesiredVisibility(schedule, DateTimeOffset.UtcNow);
+            if (desired.HasValue && !desired.Value && g.AutoDetectVisible)
+            {
+                // mark invisible and keep password state consistent
+                g.AutoDetectVisible = false;
+                g.PasswordTemporarilyDisabled = false;
+                changed = true;
+            }
+
+            if (desired.HasValue && !desired.Value)
+            {
+                groups.Remove(g);
+            }
+        }
+
+        if (changed)
+        {
+            await DbContext.SaveChangesAsync().ConfigureAwait(false);
+        }
 
         var groupIds = groups.Select(g => g.GID).ToArray();
         var memberCounts = await DbContext.GroupPairs.AsNoTracking()
@@ -510,11 +567,18 @@ public partial class MareHub
         var (hasRights, group) = await TryValidateGroupModeratorOrOwner(dto.Group.GID).ConfigureAwait(false);
         if (!hasRights) return null;
 
+        var schedule = _autoDetectScheduleCache.Get(group.GID);
+
         return new SyncshellDiscoveryStateDto
         {
             GID = group.GID,
             AutoDetectVisible = group.AutoDetectVisible,
             PasswordTemporarilyDisabled = group.PasswordTemporarilyDisabled,
+            DisplayDurationHours = schedule?.DisplayDurationHours,
+            ActiveWeekdays = schedule?.ActiveWeekdays,
+            TimeStartLocal = schedule?.TimeStartLocal,
+            TimeEndLocal = schedule?.TimeEndLocal,
+            TimeZone = schedule?.TimeZone,
         };
     }
 
@@ -522,17 +586,134 @@ public partial class MareHub
     public async Task<bool> SyncshellDiscoverySetVisibility(SyncshellDiscoveryVisibilityRequestDto dto)
     {
         _logger.LogCallInfo(MareHubLogger.Args(dto));
+        // Facade: traduire l'ancien contrat en "Policy" (Off / Duration / Recurring)
+        var mode = dto.AutoDetectVisible ? AutoDetectMode.Duration : AutoDetectMode.Off;
+        int? duration = null;
+        var weekdays = SanitizeWeekdays(dto.ActiveWeekdays);
+        var start = ParseLocalTime(dto.TimeStartLocal);
+        var end = ParseLocalTime(dto.TimeEndLocal);
+        var tz = string.IsNullOrWhiteSpace(dto.TimeZone) ? null : dto.TimeZone.Trim();
+
+        if (dto.AutoDetectVisible)
+        {
+            // Recurring seulement si jours non vides ET start/end valides ET differentes
+            bool canRecurring = weekdays != null && weekdays.Length > 0
+                                && !string.IsNullOrWhiteSpace(start)
+                                && !string.IsNullOrWhiteSpace(end)
+                                && !string.Equals(start, end, StringComparison.Ordinal);
+            if (canRecurring)
+            {
+                mode = AutoDetectMode.Recurring;
+            }
+            else
+            {
+                duration = SanitizeDisplayDuration(dto.DisplayDurationHours);
+            }
+        }
+
+        var policy = new SyncshellDiscoverySetPolicyRequestDto
+        {
+            GID = dto.GID,
+            Mode = mode,
+            DisplayDurationHours = duration,
+            ActiveWeekdays = mode == AutoDetectMode.Recurring ? weekdays : null,
+            TimeStartLocal = mode == AutoDetectMode.Recurring ? start : null,
+            TimeEndLocal = mode == AutoDetectMode.Recurring ? end : null,
+            TimeZone = mode == AutoDetectMode.Recurring ? tz : null,
+        };
+
+        return await SyncshellDiscoverySetPolicy(policy).ConfigureAwait(false);
+    }
+
+    [Authorize(Policy = "Identified")]
+    public async Task<bool> SyncshellDiscoverySetPolicy(SyncshellDiscoverySetPolicyRequestDto dto)
+    {
+        _logger.LogCallInfo(MareHubLogger.Args(dto));
 
         var (hasRights, group) = await TryValidateGroupModeratorOrOwner(dto.GID).ConfigureAwait(false);
         if (!hasRights) return false;
 
-        group.AutoDetectVisible = dto.AutoDetectVisible;
-        group.PasswordTemporarilyDisabled = dto.AutoDetectVisible;
+        // Defaults
+        int? duration = null;
+        int[]? weekdays = null;
+        string? start = null;
+        string? end = null;
+        string? tz = null;
+        bool recurring = false;
+        DateTime? lastActivated = null;
 
+        // Validate & normalize according to mode
+        switch (dto.Mode)
+        {
+            case AutoDetectMode.Off:
+                // clear policy and set invisible
+                _autoDetectScheduleCache.Clear(group.GID);
+                group.AutoDetectVisible = false;
+                group.PasswordTemporarilyDisabled = false;
+                await DbContext.SaveChangesAsync().ConfigureAwait(false);
+                await DbContext.Entry(group).Reference(g => g.Owner).LoadAsync().ConfigureAwait(false);
+                {
+                    var pairs = await DbContext.GroupPairs.AsNoTracking().Where(p => p.GroupGID == group.GID).Select(p => p.GroupUserUID).ToListAsync().ConfigureAwait(false);
+                    await Clients.Users(pairs).Client_GroupSendInfo(new GroupInfoDto(group.ToGroupData(), group.Owner.ToUserData(), group.GetGroupPermissions())
+                    {
+                        IsTemporary = group.IsTemporary,
+                        ExpiresAt = group.ExpiresAt,
+                        AutoDetectVisible = group.AutoDetectVisible,
+                        PasswordTemporarilyDisabled = group.PasswordTemporarilyDisabled,
+                    }).ConfigureAwait(false);
+                }
+                return true;
+
+            case AutoDetectMode.Duration:
+                duration = SanitizeDisplayDuration(dto.DisplayDurationHours);
+                if (!duration.HasValue)
+                {
+                    return false;
+                }
+                recurring = false;
+                lastActivated = DateTime.UtcNow;
+                break;
+
+            case AutoDetectMode.Recurring:
+                weekdays = SanitizeWeekdays(dto.ActiveWeekdays);
+                start = ParseLocalTime(dto.TimeStartLocal);
+                end = ParseLocalTime(dto.TimeEndLocal);
+                tz = string.IsNullOrWhiteSpace(dto.TimeZone) ? null : dto.TimeZone.Trim();
+                if (weekdays == null || weekdays.Length == 0) return false;
+                if (string.IsNullOrWhiteSpace(start) || string.IsNullOrWhiteSpace(end)) return false;
+                if (string.Equals(start, end, StringComparison.Ordinal)) return false;
+                recurring = true;
+                break;
+
+            default:
+                return false;
+        }
+
+        // Persist policy
+        _autoDetectScheduleCache.Set(group.GID, recurring, duration, weekdays, start, end, tz, lastActivated);
+
+        // Compute effective visibility now
+        var scheduleState = _autoDetectScheduleCache.Get(group.GID);
+        bool effectiveVisible;
+        if (dto.Mode == AutoDetectMode.Duration)
+        {
+            effectiveVisible = true; // starts immediately
+        }
+        else if (dto.Mode == AutoDetectMode.Recurring && scheduleState != null)
+        {
+            var desired = AutoDetectScheduleEvaluator.EvaluateDesiredVisibility(scheduleState, DateTimeOffset.UtcNow);
+            effectiveVisible = desired ?? false;
+        }
+        else
+        {
+            effectiveVisible = false;
+        }
+
+        group.AutoDetectVisible = effectiveVisible;
+        group.PasswordTemporarilyDisabled = effectiveVisible;
         await DbContext.SaveChangesAsync().ConfigureAwait(false);
 
         await DbContext.Entry(group).Reference(g => g.Owner).LoadAsync().ConfigureAwait(false);
-
         var groupPairs = await DbContext.GroupPairs.AsNoTracking().Where(p => p.GroupGID == group.GID).Select(p => p.GroupUserUID).ToListAsync().ConfigureAwait(false);
         await Clients.Users(groupPairs).Client_GroupSendInfo(new GroupInfoDto(group.ToGroupData(), group.Owner.ToUserData(), group.GetGroupPermissions())
         {
