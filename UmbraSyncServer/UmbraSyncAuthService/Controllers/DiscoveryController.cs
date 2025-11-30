@@ -3,6 +3,7 @@ using MareSynchronosAuthService.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 
 namespace MareSynchronosAuthService.Controllers;
 
@@ -13,11 +14,13 @@ public class DiscoveryController : Controller
 {
     private readonly DiscoveryWellKnownProvider _provider;
     private readonly DiscoveryPresenceService _presence;
+    private readonly IConfiguration _configuration;
 
-    public DiscoveryController(DiscoveryWellKnownProvider provider, DiscoveryPresenceService presence)
+    public DiscoveryController(DiscoveryWellKnownProvider provider, DiscoveryPresenceService presence, IConfiguration configuration)
     {
         _provider = provider;
         _presence = presence;
+        _configuration = configuration;
     }
 
     public sealed class QueryRequest
@@ -81,8 +84,9 @@ public class DiscoveryController : Controller
 
                 using var http = new HttpClient();
                 try { http.DefaultRequestHeaders.UserAgent.ParseAdd("UmbraAuthService/1.0"); } catch { /* ignore */ }
-                // Use same host as public (goes through nginx)
-                var baseUrl = $"{Request.Scheme}://{Request.Host.Value}";
+                // Prefer configured Main base URL if present; fallback to incoming host (nginx)
+                var configuredBase = _configuration.GetValue<string>("NearbyDiscovery:MainBaseUrl");
+                var baseUrl = string.IsNullOrWhiteSpace(configuredBase) ? $"{Request.Scheme}://{Request.Host.Value}" : configuredBase;
                 var url = new Uri(new Uri(baseUrl), "/main/discovery/notifyRequest");
 
                 // Generate internal JWT
@@ -124,7 +128,8 @@ public class DiscoveryController : Controller
 
             using var http = new HttpClient();
             try { http.DefaultRequestHeaders.UserAgent.ParseAdd("UmbraAuthService/1.0"); } catch { /* ignore */ }
-            var baseUrl = $"{Request.Scheme}://{Request.Host.Value}";
+            var configuredBase = _configuration.GetValue<string>("NearbyDiscovery:MainBaseUrl");
+            var baseUrl = string.IsNullOrWhiteSpace(configuredBase) ? $"{Request.Scheme}://{Request.Host.Value}" : configuredBase;
             var url = new Uri(new Uri(baseUrl), "/main/discovery/notifyAccept");
             var serverToken = HttpContext.RequestServices.GetRequiredService<MareSynchronosShared.Utils.ServerTokenGenerator>().Token;
             http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", serverToken);

@@ -591,6 +591,7 @@ public partial class MareHub
             MemberCount = memberCounts.TryGetValue(g.GID, out var count) ? count : 0,
             AutoAcceptPairs = g.InvitesEnabled,
             Description = null,
+            MaxUserCount = Math.Min(g.MaxUserCount > 0 ? g.MaxUserCount : _defaultGroupUserCount, _absoluteMaxGroupUserCount),
         }).ToList();
     }
 

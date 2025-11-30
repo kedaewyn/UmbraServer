@@ -53,7 +53,8 @@ public class ServerFilesController : ControllerBase
     [HttpPost(MareFiles.ServerFiles_DeleteAll)]
     public IActionResult FilesDeleteAll() => Ok();
 
-    [HttpGet(MareFiles.ServerFiles_GetSizes)]
+    [HttpPost(MareFiles.ServerFiles_GetSizes)]
+    [Produces("application/json")]
     public async Task<IActionResult> FilesGetSizes([FromBody] List<string> hashes)
     {
         var forbiddenFiles = await _mareDbContext.ForbiddenUploadEntries.
@@ -103,7 +104,7 @@ public class ServerFilesController : ControllerBase
             });
         }
 
-        return Ok(JsonSerializer.Serialize(response));
+        return Ok(response);
     }
 
     [HttpPost(MareFiles.ServerFiles_FilesSend)]
