@@ -438,7 +438,7 @@ public partial class MareHub
         {
             await Clients.User(dto.User.UID).Client_UserUpdateOtherPairPermissions(new UserPermissionsDto(new UserData(UserUID), dto.Permissions)).ConfigureAwait(false);
 
-            if (pauseChange)
+            if (pauseChange && _broadcastPresenceOnPermissionChange)
             {
                 var otherCharaIdent = await GetUserIdent(pair.OtherUserUID).ConfigureAwait(false);
 
@@ -456,6 +456,15 @@ public partial class MareHub
                 }
             }
         }
+        
+        var pausedState = dto.Permissions.IsPaused();
+        _logger.LogCallInfo(MareHubLogger.Args("PermissionsUpdated",
+            $"uid={dto.User.UID}",
+            $"paused={pausedState}",
+            "peers=1",
+            "groups=0",
+            "broadcast: SelfPairPermissions + OtherPairPermissions",
+            _broadcastPresenceOnPermissionChange ? "presence-broadcast=legacy-enabled" : "no offline/online broadcast"));
     }
 
     [Authorize(Policy = "Identified")]

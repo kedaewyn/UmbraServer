@@ -36,6 +36,7 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
     private readonly Version _expectedClientVersion;
     private readonly int _maxCharaDataByUser;
     private readonly AutoDetectScheduleCache _autoDetectScheduleCache;
+    private readonly bool _broadcastPresenceOnPermissionChange;
 
     private readonly Lazy<MareDbContext> _dbContextLazy;
     private MareDbContext DbContext => _dbContextLazy.Value;
@@ -51,7 +52,6 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
         _shardName = configuration.GetValue<string>(nameof(ServerConfiguration.ShardName));
         _maxExistingGroupsByUser = configuration.GetValueOrDefault(nameof(ServerConfiguration.MaxExistingGroupsByUser), 3);
         _maxJoinedGroupsByUser = configuration.GetValueOrDefault(nameof(ServerConfiguration.MaxJoinedGroupsByUser), 6);
-        // Raise server-side maximum capacity default to 200
         _maxGroupUserCount = configuration.GetValueOrDefault(nameof(ServerConfiguration.MaxGroupUserCount), 200);
         _defaultGroupUserCount = configuration.GetValueOrDefault(nameof(ServerConfiguration.DefaultGroupUserCount), 100);
         _absoluteMaxGroupUserCount = configuration.GetValueOrDefault(nameof(ServerConfiguration.AbsoluteMaxGroupUserCount), 200);
@@ -64,6 +64,7 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
         _autoDetectScheduleCache = autoDetectScheduleCache;
         _logger = new MareHubLogger(this, logger);
         _dbContextLazy = new Lazy<MareDbContext>(() => mareDbContextFactory.CreateDbContext());
+        _broadcastPresenceOnPermissionChange = configuration.GetValueOrDefault(nameof(ServerConfiguration.BroadcastPresenceOnPermissionChange), false);
     }
 
     protected override void Dispose(bool disposing)
@@ -149,6 +150,9 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
             await RemoveUserFromRedis().ConfigureAwait(false);
 
             await SendOfflineToAllPairedUsers().ConfigureAwait(false);
+
+            // Cleanup typing group tracking for this connection (SignalR auto-removes from groups on disconnect)
+            _ = TypingGroupsByConnection.TryRemove(Context.ConnectionId, out _);
         }
         catch { }
 

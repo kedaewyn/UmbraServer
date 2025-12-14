@@ -35,6 +35,9 @@ public class ServerConfiguration : MareConfigurationBase
 
     [RemoteConfiguration]
     public int MaxCharaDataByUser { get; set; } = 10;
+    
+    [RemoteConfiguration]
+    public bool BroadcastPresenceOnPermissionChange { get; set; } = false;
 
     public override string ToString()
     {
@@ -51,6 +54,7 @@ public class ServerConfiguration : MareConfigurationBase
         sb.AppendLine($"{nameof(PurgeUnusedAccounts)} => {PurgeUnusedAccounts}");
         sb.AppendLine($"{nameof(PurgeUnusedAccountsPeriodInDays)} => {PurgeUnusedAccountsPeriodInDays}");
         sb.AppendLine($"{nameof(MaxCharaDataByUser)} => {MaxCharaDataByUser}");
+        sb.AppendLine($"{nameof(BroadcastPresenceOnPermissionChange)} => {BroadcastPresenceOnPermissionChange}");
         return sb.ToString();
     }
 }
