@@ -114,9 +114,21 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
     [Authorize(Policy = "Authenticated")]
     public async Task<bool> CheckClientHealth()
     {
-        await UpdateUserOnRedis().ConfigureAwait(false);
+        try
+        {
+            var exists = await _redis.ExistsAsync("UID:" + UserUID).ConfigureAwait(false);
+            if (!exists)
+            {
+                return false;
+            }
 
-        return false;
+            await UpdateUserOnRedis().ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     [Authorize(Policy = "Authenticated")]
@@ -129,6 +141,33 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
             _logger.LogCallInfo(MareHubLogger.Args(_contextAccessor.GetIpAddress(), UserCharaIdent));
 
             await UpdateUserOnRedis().ConfigureAwait(false);
+            try
+            {
+                await _redis.SetAddAsync($"connections:{UserCharaIdent}", Context.ConnectionId).ConfigureAwait(false);
+                var connections = await _redis.SetMembersAsync<string>($"connections:{UserCharaIdent}").ConfigureAwait(false);
+
+                if (connections?.Length == 1)
+                {
+                    try
+                    {
+                        await SendOnlineToAllPairedUsers().ConfigureAwait(false);
+                    }
+                    catch { }
+                }
+                try
+                {
+                    var allPairedUsers = await GetAllPairedUnpausedUsers().ConfigureAwait(false);
+                    var onlinePairs = await GetOnlineUsers(allPairedUsers).ConfigureAwait(false);
+                    foreach (var kvp in onlinePairs)
+                    {
+                        await Clients.Caller
+                            .Client_UserSendOnline(new(new(kvp.Key), kvp.Value))
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch { }
+            }
+            catch { }
         }
         catch { }
 
@@ -146,12 +185,19 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
             if (exception != null)
                 _logger.LogCallWarning(MareHubLogger.Args(_contextAccessor.GetIpAddress(), exception.Message, exception.StackTrace));
 
-            await GposeLobbyLeave().ConfigureAwait(false);
-            await RemoveUserFromRedis().ConfigureAwait(false);
+            try
+            {
+                await _redis.SetRemoveAsync($"connections:{UserCharaIdent}", Context.ConnectionId).ConfigureAwait(false);
+                var connections = await _redis.SetMembersAsync<string>($"connections:{UserCharaIdent}").ConfigureAwait(false);
+                if (connections == null || connections.Length == 0)
+                {
+                    await GposeLobbyLeave().ConfigureAwait(false);
+                    await RemoveUserFromRedis().ConfigureAwait(false);
+                    await SendOfflineToAllPairedUsers().ConfigureAwait(false);
+                }
+            }
+            catch { }
 
-            await SendOfflineToAllPairedUsers().ConfigureAwait(false);
-
-            // Cleanup typing group tracking for this connection (SignalR auto-removes from groups on disconnect)
             _ = TypingGroupsByConnection.TryRemove(Context.ConnectionId, out _);
         }
         catch { }
