@@ -53,6 +53,47 @@ namespace MareSynchronosServer.Migrations
                     b.ToTable("auth", (string)null);
                 });
 
+            modelBuilder.Entity("MareSynchronosShared.Models.AutoDetectSchedule", b =>
+                {
+                    b.Property<string>("GroupGID")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("group_gid");
+
+                    b.Property<int[]>("ActiveWeekdays")
+                        .HasColumnType("integer[]")
+                        .HasColumnName("active_weekdays");
+
+                    b.Property<int?>("DisplayDurationHours")
+                        .HasColumnType("integer")
+                        .HasColumnName("display_duration_hours");
+
+                    b.Property<DateTime?>("LastActivatedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_activated_utc");
+
+                    b.Property<bool>("Recurring")
+                        .HasColumnType("boolean")
+                        .HasColumnName("recurring");
+
+                    b.Property<string>("TimeEndLocal")
+                        .HasColumnType("text")
+                        .HasColumnName("time_end_local");
+
+                    b.Property<string>("TimeStartLocal")
+                        .HasColumnType("text")
+                        .HasColumnName("time_start_local");
+
+                    b.Property<string>("TimeZone")
+                        .HasColumnType("text")
+                        .HasColumnName("time_zone");
+
+                    b.HasKey("GroupGID")
+                        .HasName("pk_autodetect_schedules");
+
+                    b.ToTable("autodetect_schedules", (string)null);
+                });
+
             modelBuilder.Entity("MareSynchronosShared.Models.Banned", b =>
                 {
                     b.Property<string>("CharacterIdentification")
@@ -426,47 +467,6 @@ namespace MareSynchronosServer.Migrations
                     b.ToTable("forbidden_upload_entries", (string)null);
                 });
 
-            modelBuilder.Entity("MareSynchronosShared.Models.AutoDetectSchedule", b =>
-                {
-                    b.Property<string>("GroupGID")
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasColumnName("group_gid");
-
-                    b.Property<int[]>("ActiveWeekdays")
-                        .HasColumnType("integer[]")
-                        .HasColumnName("active_weekdays");
-
-                    b.Property<int?>("DisplayDurationHours")
-                        .HasColumnType("integer")
-                        .HasColumnName("display_duration_hours");
-
-                    b.Property<DateTime?>("LastActivatedUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("last_activated_utc");
-
-                    b.Property<bool>("Recurring")
-                        .HasColumnType("boolean")
-                        .HasColumnName("recurring");
-
-                    b.Property<string>("TimeEndLocal")
-                        .HasColumnType("text")
-                        .HasColumnName("time_end_local");
-
-                    b.Property<string>("TimeStartLocal")
-                        .HasColumnType("text")
-                        .HasColumnName("time_start_local");
-
-                    b.Property<string>("TimeZone")
-                        .HasColumnType("text")
-                        .HasColumnName("time_zone");
-
-                    b.HasKey("GroupGID")
-                        .HasName("pk_autodetect_schedules");
-
-                    b.ToTable("autodetect_schedules", (string)null);
-                });
-
             modelBuilder.Entity("MareSynchronosShared.Models.Group", b =>
                 {
                     b.Property<string>("GID")
@@ -518,6 +518,14 @@ namespace MareSynchronosServer.Migrations
                     b.Property<bool>("PasswordTemporarilyDisabled")
                         .HasColumnType("boolean")
                         .HasColumnName("password_temporarily_disabled");
+
+                    b.Property<bool>("IsPaused")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_paused");
+
+                    b.Property<int>("MaxUserCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("max_user_count");
 
                     b.HasKey("GID")
                         .HasName("pk_groups");
@@ -891,6 +899,16 @@ namespace MareSynchronosServer.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("MareSynchronosShared.Models.AutoDetectSchedule", b =>
+                {
+                    b.HasOne("MareSynchronosShared.Models.Group", null)
+                        .WithOne()
+                        .HasForeignKey("MareSynchronosShared.Models.AutoDetectSchedule", "GroupGID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_autodetect_schedules_groups_group_gid");
+                });
+
             modelBuilder.Entity("MareSynchronosShared.Models.CharaData", b =>
                 {
                     b.HasOne("MareSynchronosShared.Models.User", "Uploader")
@@ -1075,16 +1093,6 @@ namespace MareSynchronosServer.Migrations
                     b.Navigation("Group");
 
                     b.Navigation("GroupUser");
-                });
-
-            modelBuilder.Entity("MareSynchronosShared.Models.AutoDetectSchedule", b =>
-                {
-                    b.HasOne("MareSynchronosShared.Models.Group", null)
-                        .WithOne()
-                        .HasForeignKey("MareSynchronosShared.Models.AutoDetectSchedule", "GroupGID")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("fk_autodetect_schedules_groups_group_gid");
                 });
 
             modelBuilder.Entity("MareSynchronosShared.Models.GroupTempInvite", b =>

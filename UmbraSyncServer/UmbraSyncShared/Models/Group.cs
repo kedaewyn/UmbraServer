@@ -22,4 +22,5 @@ public class Group
     public bool AutoDetectVisible { get; set; }
     public bool PasswordTemporarilyDisabled { get; set; }
     public int MaxUserCount { get; set; }
+    public bool IsPaused { get; set; }
 }

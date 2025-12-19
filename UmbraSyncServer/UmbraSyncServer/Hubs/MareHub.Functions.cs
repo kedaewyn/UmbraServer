@@ -76,6 +76,7 @@ public partial class MareHub
                             .Union(
                                 (from userGroupPair in DbContext.GroupPairs
                                  join otherGroupPair in DbContext.GroupPairs on userGroupPair.GroupGID equals otherGroupPair.GroupGID
+                                 join g in DbContext.Groups on userGroupPair.GroupGID equals g.GID
                                  where
                                      userGroupPair.GroupUserUID == uid
                                      && otherGroupPair.GroupUserUID != uid
@@ -83,8 +84,8 @@ public partial class MareHub
                                  {
                                      UID = Convert.ToString(otherGroupPair.GroupUserUID),
                                      GID = Convert.ToString(otherGroupPair.GroupGID),
-                                     PauseStateSelf = userGroupPair.IsPaused,
-                                     PauseStateOther = otherGroupPair.IsPaused,
+                                     PauseStateSelf = userGroupPair.IsPaused || g.IsPaused,
+                                     PauseStateOther = otherGroupPair.IsPaused || g.IsPaused,
                                  })
                             ).AsNoTracking().ToListAsync().ConfigureAwait(false);
 

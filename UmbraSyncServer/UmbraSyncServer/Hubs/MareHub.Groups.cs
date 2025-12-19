@@ -60,6 +60,7 @@ public partial class MareHub
         group.DisableSounds = dto.Permissions.HasFlag(GroupPermissions.DisableSounds);
         group.DisableAnimations = dto.Permissions.HasFlag(GroupPermissions.DisableAnimations);
         group.DisableVFX = dto.Permissions.HasFlag(GroupPermissions.DisableVFX);
+        group.IsPaused = dto.Permissions.HasFlag(GroupPermissions.Paused);
 
         await DbContext.SaveChangesAsync().ConfigureAwait(false);
 
