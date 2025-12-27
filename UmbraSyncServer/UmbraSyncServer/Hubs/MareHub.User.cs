@@ -222,22 +222,29 @@ public partial class MareHub
 
         var allUserPairs = await GetAllPairedUnpausedUsers().ConfigureAwait(false);
 
-        if (!allUserPairs.Contains(user.User.UID, StringComparer.Ordinal) && !string.Equals(user.User.UID, UserUID, StringComparison.Ordinal))
+        if (!allUserPairs.Contains(user.User.UID, StringComparison.Ordinal) && !string.Equals(user.User.UID, UserUID, StringComparison.Ordinal))
         {
             return new UserProfileDto(user.User, false, null, null, "Due to the pause status you cannot access this users profile.");
         }
 
-        var data = await DbContext.UserProfileData.SingleOrDefaultAsync(u => u.UserUID == user.User.UID).ConfigureAwait(false);
-        if (data == null) return new UserProfileDto(user.User, false, null, null, null);
+        var hrpData = await DbContext.UserProfileData.SingleOrDefaultAsync(u => u.UserUID == user.User.UID).ConfigureAwait(false);
+        CharacterRpProfileData? rpData = null;
+        if (!string.IsNullOrEmpty(user.CharacterName) && user.WorldId.HasValue)
+        {
+            rpData = await DbContext.CharacterRpProfiles.SingleOrDefaultAsync(u => u.UserUID == user.User.UID && u.CharacterName == user.CharacterName && u.WorldId == user.WorldId).ConfigureAwait(false);
+        }
 
-        if (data.FlaggedForReport) return new UserProfileDto(user.User, true, null, null, "This profile is flagged for report and pending evaluation");
-        if (data.ProfileDisabled) return new UserProfileDto(user.User, true, null, null, "This profile was permanently disabled");
+        if (hrpData == null && rpData == null) return new UserProfileDto(user.User, false, null, null, null);
 
-        return new UserProfileDto(user.User, false, data.IsNSFW, data.Base64ProfileImage, data.UserDescription,
-            data.RpProfilePictureBase64, data.RpDescription, data.IsRpNSFW,
-            data.RpFirstName, data.RpLastName, data.RpTitle, data.RpAge,
-            data.RpHeight, data.RpBuild, data.RpOccupation, data.RpAffiliation,
-            data.RpAlignment, data.RpAdditionalInfo);
+        if (hrpData?.FlaggedForReport ?? false) return new UserProfileDto(user.User, true, null, null, "This profile is flagged for report and pending evaluation");
+        if (hrpData?.ProfileDisabled ?? false) return new UserProfileDto(user.User, true, null, null, "This profile was permanently disabled");
+
+        return new UserProfileDto(user.User, false, hrpData?.IsNSFW, hrpData?.Base64ProfileImage, hrpData?.UserDescription,
+            rpData?.RpProfilePictureBase64, rpData?.RpDescription, rpData?.IsRpNSFW,
+            rpData?.RpFirstName, rpData?.RpLastName, rpData?.RpTitle, rpData?.RpAge,
+            rpData?.RpHeight, rpData?.RpBuild, rpData?.RpOccupation, rpData?.RpAffiliation,
+            rpData?.RpAlignment, rpData?.RpAdditionalInfo,
+            user.CharacterName, user.WorldId);
     }
 
     [Authorize(Policy = "Identified")]
@@ -478,73 +485,41 @@ public partial class MareHub
 
         if (!string.Equals(dto.User.UID, UserUID, StringComparison.Ordinal)) throw new HubException("Cannot modify profile data for anyone but yourself");
 
-        var existingData = await DbContext.UserProfileData.SingleOrDefaultAsync(u => u.UserUID == dto.User.UID).ConfigureAwait(false);
+        var existingHrpData = await DbContext.UserProfileData.SingleOrDefaultAsync(u => u.UserUID == dto.User.UID).ConfigureAwait(false);
 
-        if (existingData?.FlaggedForReport ?? false)
+        if (existingHrpData?.FlaggedForReport ?? false)
         {
             await Clients.Caller.Client_ReceiveServerMessage(MessageSeverity.Error, "Your profile is currently flagged for report and cannot be edited").ConfigureAwait(false);
             return;
         }
 
-        if (existingData?.ProfileDisabled ?? false)
+        if (existingHrpData?.ProfileDisabled ?? false)
         {
             await Clients.Caller.Client_ReceiveServerMessage(MessageSeverity.Error, "Your profile was permanently disabled and cannot be edited").ConfigureAwait(false);
             return;
         }
 
-        if (!string.IsNullOrEmpty(dto.ProfilePictureBase64))
-        {
-            byte[] imageData = Convert.FromBase64String(dto.ProfilePictureBase64);
-            using MemoryStream ms = new(imageData);
-            var format = await Image.DetectFormatAsync(ms).ConfigureAwait(false);
-            if (!format.FileExtensions.Contains("png", StringComparer.OrdinalIgnoreCase))
-            {
-                await Clients.Caller.Client_ReceiveServerMessage(MessageSeverity.Error, "Your provided image file is not in PNG format").ConfigureAwait(false);
-                return;
-            }
-            using var image = Image.Load<Rgba32>(imageData);
-
-            if (image.Width > 256 || image.Height > 256 || (imageData.Length > 250 * 1024))
-            {
-                await Clients.Caller.Client_ReceiveServerMessage(MessageSeverity.Error, "Your provided image file is larger than 256x256 or more than 250KiB.").ConfigureAwait(false);
-                return;
-            }
-        }
-
-        if (existingData != null)
+        // --- Handle HRP Profile ---
+        if (existingHrpData != null)
         {
             if (string.Equals("", dto.ProfilePictureBase64, StringComparison.OrdinalIgnoreCase))
             {
-                existingData.Base64ProfileImage = null;
+                existingHrpData.Base64ProfileImage = null;
             }
             else if (dto.ProfilePictureBase64 != null)
             {
-                existingData.Base64ProfileImage = dto.ProfilePictureBase64;
+                existingHrpData.Base64ProfileImage = dto.ProfilePictureBase64;
             }
 
             if (dto.IsNSFW != null)
             {
-                existingData.IsNSFW = dto.IsNSFW.Value;
+                existingHrpData.IsNSFW = dto.IsNSFW.Value;
             }
 
             if (dto.Description != null)
             {
-                existingData.UserDescription = dto.Description;
+                existingHrpData.UserDescription = dto.Description;
             }
-
-            if (dto.RpDescription != null) existingData.RpDescription = dto.RpDescription;
-            if (dto.RpProfilePictureBase64 != null) existingData.RpProfilePictureBase64 = dto.RpProfilePictureBase64;
-            if (dto.IsRpNSFW != null) existingData.IsRpNSFW = dto.IsRpNSFW.Value;
-            if (dto.RpFirstName != null) existingData.RpFirstName = dto.RpFirstName;
-            if (dto.RpLastName != null) existingData.RpLastName = dto.RpLastName;
-            if (dto.RpTitle != null) existingData.RpTitle = dto.RpTitle;
-            if (dto.RpAge != null) existingData.RpAge = dto.RpAge;
-            if (dto.RpHeight != null) existingData.RpHeight = dto.RpHeight;
-            if (dto.RpBuild != null) existingData.RpBuild = dto.RpBuild;
-            if (dto.RpOccupation != null) existingData.RpOccupation = dto.RpOccupation;
-            if (dto.RpAffiliation != null) existingData.RpAffiliation = dto.RpAffiliation;
-            if (dto.RpAlignment != null) existingData.RpAlignment = dto.RpAlignment;
-            if (dto.RpAdditionalInfo != null) existingData.RpAdditionalInfo = dto.RpAdditionalInfo;
         }
         else
         {
@@ -554,22 +529,53 @@ public partial class MareHub
                 Base64ProfileImage = dto.ProfilePictureBase64 ?? null,
                 UserDescription = dto.Description ?? null,
                 IsNSFW = dto.IsNSFW ?? false,
-                RpProfilePictureBase64 = dto.RpProfilePictureBase64 ?? null,
-                RpDescription = dto.RpDescription ?? null,
-                IsRpNSFW = dto.IsRpNSFW ?? false,
-                RpFirstName = dto.RpFirstName ?? null,
-                RpLastName = dto.RpLastName ?? null,
-                RpTitle = dto.RpTitle ?? null,
-                RpAge = dto.RpAge ?? null,
-                RpHeight = dto.RpHeight ?? null,
-                RpBuild = dto.RpBuild ?? null,
-                RpOccupation = dto.RpOccupation ?? null,
-                RpAffiliation = dto.RpAffiliation ?? null,
-                RpAlignment = dto.RpAlignment ?? null,
-                RpAdditionalInfo = dto.RpAdditionalInfo ?? null
             };
-
             await DbContext.UserProfileData.AddAsync(userProfileData).ConfigureAwait(false);
+        }
+
+        // --- Handle RP Profile (Character specific) ---
+        if (!string.IsNullOrEmpty(dto.CharacterName) && dto.WorldId.HasValue)
+        {
+            var existingRpData = await DbContext.CharacterRpProfiles.SingleOrDefaultAsync(u => u.UserUID == dto.User.UID && u.CharacterName == dto.CharacterName && u.WorldId == dto.WorldId).ConfigureAwait(false);
+            if (existingRpData != null)
+            {
+                if (dto.RpDescription != null) existingRpData.RpDescription = dto.RpDescription;
+                if (dto.RpProfilePictureBase64 != null) existingRpData.RpProfilePictureBase64 = dto.RpProfilePictureBase64;
+                if (dto.IsRpNSFW != null) existingRpData.IsRpNSFW = dto.IsRpNSFW.Value;
+                if (dto.RpFirstName != null) existingRpData.RpFirstName = dto.RpFirstName;
+                if (dto.RpLastName != null) existingRpData.RpLastName = dto.RpLastName;
+                if (dto.RpTitle != null) existingRpData.RpTitle = dto.RpTitle;
+                if (dto.RpAge != null) existingRpData.RpAge = dto.RpAge;
+                if (dto.RpHeight != null) existingRpData.RpHeight = dto.RpHeight;
+                if (dto.RpBuild != null) existingRpData.RpBuild = dto.RpBuild;
+                if (dto.RpOccupation != null) existingRpData.RpOccupation = dto.RpOccupation;
+                if (dto.RpAffiliation != null) existingRpData.RpAffiliation = dto.RpAffiliation;
+                if (dto.RpAlignment != null) existingRpData.RpAlignment = dto.RpAlignment;
+                if (dto.RpAdditionalInfo != null) existingRpData.RpAdditionalInfo = dto.RpAdditionalInfo;
+            }
+            else
+            {
+                CharacterRpProfileData rpProfileData = new()
+                {
+                    UserUID = dto.User.UID,
+                    CharacterName = dto.CharacterName,
+                    WorldId = dto.WorldId.Value,
+                    RpProfilePictureBase64 = dto.RpProfilePictureBase64 ?? null,
+                    RpDescription = dto.RpDescription ?? null,
+                    IsRpNSFW = dto.IsRpNSFW ?? false,
+                    RpFirstName = dto.RpFirstName ?? null,
+                    RpLastName = dto.RpLastName ?? null,
+                    RpTitle = dto.RpTitle ?? null,
+                    RpAge = dto.RpAge ?? null,
+                    RpHeight = dto.RpHeight ?? null,
+                    RpBuild = dto.RpBuild ?? null,
+                    RpOccupation = dto.RpOccupation ?? null,
+                    RpAffiliation = dto.RpAffiliation ?? null,
+                    RpAlignment = dto.RpAlignment ?? null,
+                    RpAdditionalInfo = dto.RpAdditionalInfo ?? null
+                };
+                await DbContext.CharacterRpProfiles.AddAsync(rpProfileData).ConfigureAwait(false);
+            }
         }
 
         await DbContext.SaveChangesAsync().ConfigureAwait(false);

@@ -44,6 +44,7 @@ public class MareDbContext : DbContext
     public DbSet<AutoDetectSchedule> AutoDetectSchedules { get; set; }
     public DbSet<LodeStoneAuth> LodeStoneAuth { get; set; }
     public DbSet<UserProfileData> UserProfileData { get; set; }
+    public DbSet<CharacterRpProfileData> CharacterRpProfiles { get; set; }
     public DbSet<UserProfileDataReport> UserProfileReports { get; set; }
     public DbSet<User> Users { get; set; }
     public DbSet<Slot> Slots { get; set; }
@@ -115,6 +116,9 @@ public class MareDbContext : DbContext
     {
         mb.Entity<UserProfileData>().ToTable("user_profile_data");
         mb.Entity<UserProfileData>().HasKey(c => c.UserUID);
+        mb.Entity<CharacterRpProfileData>().ToTable("character_rp_profiles");
+        mb.Entity<CharacterRpProfileData>().HasKey(c => c.Id);
+        mb.Entity<CharacterRpProfileData>().HasIndex(c => new { c.UserUID, c.CharacterName, c.WorldId }).IsUnique();
         mb.Entity<UserProfileDataReport>().ToTable("user_profile_data_reports");
     }
 
