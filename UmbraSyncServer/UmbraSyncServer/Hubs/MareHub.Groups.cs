@@ -523,7 +523,7 @@ public partial class MareHub
         var group = await DbContext.Groups.Include(g => g.Owner).AsNoTracking().SingleOrDefaultAsync(g => g.GID == aliasOrGid || g.Alias == aliasOrGid).ConfigureAwait(false);
         var hashedPw = StringUtils.Sha256String(dto.Password);
 
-        return await JoinGroupInternal(group, aliasOrGid, hashedPw, allowPasswordless: false, skipInviteCheck: false).ConfigureAwait(false);
+        return await JoinGroupInternal(group, aliasOrGid, hashedPw, allowPasswordless: false, skipInviteCheck: false, isSlotJoin: false).ConfigureAwait(false);
     }
 
     [Authorize(Policy = "Identified")]
@@ -535,7 +535,7 @@ public partial class MareHub
 
         var group = await DbContext.Groups.Include(g => g.Owner).AsNoTracking().SingleOrDefaultAsync(g => g.GID == gid).ConfigureAwait(false);
 
-        return await JoinGroupInternal(group, gid, hashedPassword: null, allowPasswordless: true, skipInviteCheck: true).ConfigureAwait(false);
+        return await JoinGroupInternal(group, gid, hashedPassword: null, allowPasswordless: true, skipInviteCheck: true, isSlotJoin: false).ConfigureAwait(false);
     }
 
     [Authorize(Policy = "Identified")]
@@ -765,9 +765,13 @@ public partial class MareHub
         return true;
     }
 
-    private async Task<bool> JoinGroupInternal(Group? group, string aliasOrGid, string? hashedPassword, bool allowPasswordless, bool skipInviteCheck)
+    private async Task<bool> JoinGroupInternal(Group? group, string aliasOrGid, string? hashedPassword, bool allowPasswordless, bool skipInviteCheck, bool isSlotJoin)
     {
-        if (group == null) return false;
+        if (group == null) 
+        {
+            _logger.LogCallInfo(MareHubLogger.Args(aliasOrGid, "Join failed: Group null"));
+            return false;
+        }
 
         var groupGid = group.GID;
         var existingPair = await DbContext.GroupPairs.AsNoTracking().SingleOrDefaultAsync(g => g.GroupGID == groupGid && g.GroupUserUID == UserUID).ConfigureAwait(false);
@@ -781,25 +785,47 @@ public partial class MareHub
             oneTimeInvite = await DbContext.GroupTempInvites.SingleOrDefaultAsync(g => g.GroupGID == groupGid && g.Invite == hashedPassword).ConfigureAwait(false);
         }
 
-        if (allowPasswordless && !group.AutoDetectVisible)
+        if (allowPasswordless && !group.AutoDetectVisible && !isSlotJoin)
         {
+            _logger.LogCallInfo(MareHubLogger.Args(aliasOrGid, "Join failed: Not visible and not slot join"));
             return false;
         }
 
-        bool passwordBypass = group.PasswordTemporarilyDisabled || allowPasswordless;
+        bool passwordBypass = group.PasswordTemporarilyDisabled || allowPasswordless || isSlotJoin;
         bool passwordMatches = !string.IsNullOrEmpty(hashedPassword) && string.Equals(group.HashedPassword, hashedPassword, StringComparison.Ordinal);
         bool hasValidCredential = passwordBypass || passwordMatches || oneTimeInvite != null;
 
         var effectiveGroupMax = group.MaxUserCount > 0 ? group.MaxUserCount : _defaultGroupUserCount;
         var effectiveCap = Math.Min(effectiveGroupMax, _absoluteMaxGroupUserCount);
 
-        if (!hasValidCredential
-            || existingPair != null
-            || existingUserCount >= effectiveCap
-            || (!skipInviteCheck && !group.InvitesEnabled)
-            || joinedGroups >= _maxJoinedGroupsByUser
-            || isBanned)
+        if (!hasValidCredential)
         {
+            _logger.LogCallInfo(MareHubLogger.Args(aliasOrGid, "Join failed: No valid credential"));
+            return false;
+        }
+        if (existingPair != null)
+        {
+            _logger.LogCallInfo(MareHubLogger.Args(aliasOrGid, "Join failed: Already in group"));
+            return false;
+        }
+        if (existingUserCount >= effectiveCap)
+        {
+            _logger.LogCallInfo(MareHubLogger.Args(aliasOrGid, "Join failed: Group full", existingUserCount, effectiveCap));
+            return false;
+        }
+        if (!skipInviteCheck && !group.InvitesEnabled)
+        {
+            _logger.LogCallInfo(MareHubLogger.Args(aliasOrGid, "Join failed: Invites disabled"));
+            return false;
+        }
+        if (joinedGroups >= _maxJoinedGroupsByUser)
+        {
+            _logger.LogCallInfo(MareHubLogger.Args(aliasOrGid, "Join failed: Max joined groups reached"));
+            return false;
+        }
+        if (isBanned)
+        {
+            _logger.LogCallInfo(MareHubLogger.Args(aliasOrGid, "Join failed: User is banned"));
             return false;
         }
 

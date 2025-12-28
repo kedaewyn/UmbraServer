@@ -46,9 +46,16 @@ public partial class MareHub
         var playerPos = new Vector3(x, y, z);
         
         // On cherche le slot le plus proche dont le rayon englobe le joueur
+        _logger.LogCallInfo(MareHubLogger.Args(serverId, territoryId, "Found slots count", slots.Count));
+        foreach (var s in slots)
+        {
+            var dist = Vector2.Distance(new Vector2(s.X, s.Z), new Vector2(playerPos.X, playerPos.Z));
+            _logger.LogCallInfo(MareHubLogger.Args(s.SlotName, "Dist2D", dist, "Radius", s.Radius));
+        }
+
         var nearbySlot = slots
-            .Where(s => Vector3.Distance(new Vector3(s.X, s.Y, s.Z), playerPos) <= s.Radius)
-            .OrderBy(s => Vector3.Distance(new Vector3(s.X, s.Y, s.Z), playerPos))
+            .Where(s => Vector2.Distance(new Vector2(s.X, s.Z), new Vector2(playerPos.X, playerPos.Z)) <= s.Radius)
+            .OrderBy(s => Vector2.Distance(new Vector2(s.X, s.Z), new Vector2(playerPos.X, playerPos.Z)))
             .FirstOrDefault();
 
         return nearbySlot?.ToSlotInfoDto();
@@ -125,5 +132,23 @@ public partial class MareHub
         await DbContext.SaveChangesAsync().ConfigureAwait(false);
         _logger.LogCallInfo(MareHubLogger.Args(request, "Success"));
         return true;
+    }
+
+    [Authorize(Policy = "Identified")]
+    public async Task<bool> SlotJoin(Guid slotId)
+    {
+        _logger.LogCallInfo(MareHubLogger.Args(slotId));
+
+        var slot = await DbContext.Slots
+            .Include(s => s.Group)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.SlotId == slotId)
+            .ConfigureAwait(false);
+
+        if (slot == null) return false;
+
+        // On autorise le join sans mot de passe si l'utilisateur est près du slot.
+        // On délègue le join à JoinGroupInternal avec allowPasswordless=true, skipInviteCheck=true et isSlotJoin=true
+        return await JoinGroupInternal(slot.Group, slot.GroupGID, hashedPassword: null, allowPasswordless: true, skipInviteCheck: true, isSlotJoin: true).ConfigureAwait(false);
     }
 }
