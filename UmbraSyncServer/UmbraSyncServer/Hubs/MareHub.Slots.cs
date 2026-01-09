@@ -20,9 +20,10 @@ public partial class MareHub
         var slot = await DbContext.Slots
             .Include(s => s.Group)
             .AsNoTracking()
-            .FirstOrDefaultAsync(s => s.ServerId == location.ServerId 
-                                   && s.TerritoryId == location.TerritoryId 
-                                   && s.WardId == location.WardId 
+            .FirstOrDefaultAsync(s => s.ServerId == location.ServerId
+                                   && s.TerritoryId == location.TerritoryId
+                                   && s.DivisionId == location.DivisionId
+                                   && s.WardId == location.WardId
                                    && s.PlotId == location.PlotId)
             .ConfigureAwait(false);
 
@@ -30,28 +31,21 @@ public partial class MareHub
     }
 
     [Authorize(Policy = "Identified")]
-    public async Task<SlotInfoResponseDto?> SlotGetNearby(uint serverId, uint territoryId, float x, float y, float z)
+    public async Task<SlotInfoResponseDto?> SlotGetNearby(uint serverId, uint territoryId, uint divisionId, uint wardId, float x, float y, float z)
     {
-        _logger.LogCallInfo(MareHubLogger.Args(serverId, territoryId, x, y, z));
+        _logger.LogCallInfo(MareHubLogger.Args(serverId, territoryId, divisionId, wardId, x, y, z));
 
-        // On récupère tous les slots du territoire pour filtrer par distance
-        // En pratique il n'y en a pas des milliers par territoire
         var slots = await DbContext.Slots
             .Include(s => s.Group)
             .AsNoTracking()
-            .Where(s => s.ServerId == serverId && s.TerritoryId == territoryId)
+            .Where(s => s.ServerId == serverId
+                     && s.TerritoryId == territoryId
+                     && s.DivisionId == divisionId
+                     && s.WardId == wardId)
             .ToListAsync()
             .ConfigureAwait(false);
 
         var playerPos = new Vector3(x, y, z);
-        
-        // On cherche le slot le plus proche dont le rayon englobe le joueur
-        _logger.LogCallInfo(MareHubLogger.Args(serverId, territoryId, "Found slots count", slots.Count));
-        foreach (var s in slots)
-        {
-            var dist = Vector2.Distance(new Vector2(s.X, s.Z), new Vector2(playerPos.X, playerPos.Z));
-            _logger.LogCallInfo(MareHubLogger.Args(s.SlotName, "Dist2D", dist, "Radius", s.Radius));
-        }
 
         var nearbySlot = slots
             .Where(s => Vector2.Distance(new Vector2(s.X, s.Z), new Vector2(playerPos.X, playerPos.Z)) <= s.Radius)
@@ -121,6 +115,7 @@ public partial class MareHub
         {
             slot.ServerId = request.Location.ServerId;
             slot.TerritoryId = request.Location.TerritoryId;
+            slot.DivisionId = request.Location.DivisionId;
             slot.WardId = request.Location.WardId;
             slot.PlotId = request.Location.PlotId;
             slot.X = request.Location.X;
