@@ -875,10 +875,14 @@ public partial class MareHub
 
         foreach (var groupUserPair in groupPairs)
         {
-            var userPair = allUserPairs.Single(p => string.Equals(p.UID, groupUserPair.GroupUserUID, StringComparison.Ordinal));
-            if (userPair.IsDirectlyPaused != PauseInfo.NoConnection) continue;
-            if (userPair.IsPausedExcludingGroup(group.GID) is PauseInfo.Unpaused) continue;
-            if (userPair.IsPausedPerGroup is PauseInfo.Paused) continue;
+            var userPair = allUserPairs.SingleOrDefault(p => string.Equals(p.UID, groupUserPair.GroupUserUID, StringComparison.Ordinal));
+
+            if (userPair != null)
+            {
+                if (userPair.IsDirectlyPaused != PauseInfo.NoConnection) continue;
+                if (userPair.IsPausedExcludingGroup(group.GID) is PauseInfo.Unpaused) continue;
+                if (userPair.IsPausedPerGroup is PauseInfo.Paused) continue;
+            }
 
             var groupUserIdent = await GetUserIdent(groupUserPair.GroupUserUID).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(groupUserIdent))
