@@ -156,7 +156,8 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
                 BucketName = bucketName,
                 Key = key,
                 ContentType = "application/octet-stream",
-                StorageClass = S3StorageClass.Standard
+                StorageClass = S3StorageClass.Standard,
+                CannedACL = S3CannedACL.PublicRead
             };
 
             await transferUtility.UploadAsync(uploadRequest, ct).ConfigureAwait(false);
