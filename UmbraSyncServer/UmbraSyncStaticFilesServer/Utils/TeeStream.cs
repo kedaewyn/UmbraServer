@@ -51,9 +51,9 @@ public class TeeStream : Stream
 
     public async override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
     {
-        int n = await _inStream.ReadAsync(buffer, offset, count, cancellationToken);
+        int n = await _inStream.ReadAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
         if (n > 0)
-            await _outStream.WriteAsync(buffer, offset, n);
+            await _outStream.WriteAsync(buffer, offset, n, cancellationToken).ConfigureAwait(false);
         return n;
     }
 

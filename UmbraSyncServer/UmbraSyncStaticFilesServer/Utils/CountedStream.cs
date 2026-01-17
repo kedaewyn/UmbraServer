@@ -44,7 +44,7 @@ public class CountedStream : Stream
 
     public async override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
     {
-        int n = await _stream.ReadAsync(buffer, offset, count, cancellationToken);
+        int n = await _stream.ReadAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
         BytesRead += n;
         return n;
     }
@@ -67,7 +67,7 @@ public class CountedStream : Stream
 
     public async override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
     {
-        await _stream.WriteAsync(buffer, offset, count, cancellationToken);
+        await _stream.WriteAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
         BytesWritten += count;
     }
 }

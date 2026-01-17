@@ -38,6 +38,7 @@ public class ServerConfiguration : MareConfigurationBase
     
     [RemoteConfiguration]
     public bool BroadcastPresenceOnPermissionChange { get; set; } = false;
+    public int HubExecutionConcurrencyLimit { get; set; } = 50;
 
     public override string ToString()
     {
@@ -55,6 +56,7 @@ public class ServerConfiguration : MareConfigurationBase
         sb.AppendLine($"{nameof(PurgeUnusedAccountsPeriodInDays)} => {PurgeUnusedAccountsPeriodInDays}");
         sb.AppendLine($"{nameof(MaxCharaDataByUser)} => {MaxCharaDataByUser}");
         sb.AppendLine($"{nameof(BroadcastPresenceOnPermissionChange)} => {BroadcastPresenceOnPermissionChange}");
+        sb.AppendLine($"{nameof(HubExecutionConcurrencyLimit)} => {HubExecutionConcurrencyLimit}");
         return sb.ToString();
     }
 }

@@ -38,6 +38,13 @@ public class StaticFilesServerConfiguration : MareConfigurationBase
     public bool UseSSI { get; set; } = false;
     public string SSIContentType { get; set; } = "application/x-block-file-list";
 
+    public bool ScalewayEnabled { get; set; } = false;
+    public string ScalewayAccessKey { get; set; } = string.Empty;
+    public string ScalewaySecretKey { get; set; } = string.Empty;
+    public string ScalewayBucketName { get; set; } = string.Empty;
+    public string ScalewayRegion { get; set; } = string.Empty;
+    public string ScalewayEndpoint { get; set; } = string.Empty;
+
     public override string ToString()
     {
         StringBuilder sb = new();
@@ -63,6 +70,10 @@ public class StaticFilesServerConfiguration : MareConfigurationBase
         sb.AppendLine($"{nameof(DownloadQueueReleaseSeconds)} => {DownloadQueueReleaseSeconds}");
         sb.AppendLine($"{nameof(CdnShardConfiguration)} => {string.Join(", ", CdnShardConfiguration)}");
         sb.AppendLine($"{nameof(UseXAccelRedirect)} => {UseXAccelRedirect}");
+        sb.AppendLine($"{nameof(ScalewayEnabled)} => {ScalewayEnabled}");
+        sb.AppendLine($"{nameof(ScalewayBucketName)} => {ScalewayBucketName}");
+        sb.AppendLine($"{nameof(ScalewayRegion)} => {ScalewayRegion}");
+        sb.AppendLine($"{nameof(ScalewayEndpoint)} => {ScalewayEndpoint}");
         return sb.ToString();
     }
 }

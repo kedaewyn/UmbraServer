@@ -26,6 +26,7 @@ public class Slot
     // Location details
     public uint ServerId { get; set; }
     public uint TerritoryId { get; set; }
+    public uint DivisionId { get; set; }
     public uint WardId { get; set; }
     public uint PlotId { get; set; }
     
