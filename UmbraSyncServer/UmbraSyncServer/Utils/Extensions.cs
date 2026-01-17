@@ -19,6 +19,7 @@ namespace MareSynchronosServer.Utils
                 {
                     ServerId = slot.ServerId,
                     TerritoryId = slot.TerritoryId,
+                    DivisionId = slot.DivisionId,
                     WardId = slot.WardId,
                     PlotId = slot.PlotId,
                     X = slot.X,

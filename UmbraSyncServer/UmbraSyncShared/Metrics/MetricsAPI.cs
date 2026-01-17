@@ -43,4 +43,11 @@ public class MetricsAPI
     public const string CounterAccountsCreated = "mare_accounts_created";
     public const string GaugeGposeLobbies = "mare_gpose_lobbies";
     public const string GaugeGposeLobbyUsers = "mare_gpose_lobby_users";
+    public const string GaugePairCacheUsers = "mare_pair_cache_users";
+    public const string GaugePairCacheEntries = "mare_pair_cache_entries";
+    public const string CounterPairCacheHit = "mare_pair_cache_hit";
+    public const string CounterPairCacheMiss = "mare_pair_cache_miss";
+    public const string GaugeHubConcurrencyAvailable = "mare_hub_concurrency_available";
+    public const string GaugeHubConcurrencyQueued = "mare_hub_concurrency_queued";
+    public const string CounterHubConcurrencyRejected = "mare_hub_concurrency_rejected";
 }

@@ -34,11 +34,13 @@ public class ServerFilesController : ControllerBase
     private readonly IHubContext<MareHub> _hubContext;
     private readonly MareDbContext _mareDbContext;
     private readonly MareMetrics _metricsClient;
+    private readonly ScalewayStorageService _scalewayStorage;
 
     public ServerFilesController(ILogger<ServerFilesController> logger, CachedFileProvider cachedFileProvider,
         IConfigurationService<StaticFilesServerConfiguration> configuration,
         IHubContext<MareHub> hubContext,
-        MareDbContext mareDbContext, MareMetrics metricsClient) : base(logger)
+        MareDbContext mareDbContext, MareMetrics metricsClient,
+        ScalewayStorageService scalewayStorage) : base(logger)
     {
         _configuration = configuration;
         _basePath = configuration.GetValue<string>(nameof(StaticFilesServerConfiguration.CacheDirectory));
@@ -48,6 +50,7 @@ public class ServerFilesController : ControllerBase
         _hubContext = hubContext;
         _mareDbContext = mareDbContext;
         _metricsClient = metricsClient;
+        _scalewayStorage = scalewayStorage;
     }
 
     [HttpPost(MareFiles.ServerFiles_DeleteAll)]
@@ -94,6 +97,14 @@ public class ServerFilesController : ControllerBase
             catch { return false; }
         }
 
+        string BuildDirectDownloadUrl(string hash)
+        {
+            if (!_scalewayStorage.IsEnabled) return string.Empty;
+            var cdnUrl = DefaultCdnUrlSafely()?.ToString().TrimEnd('/');
+            if (string.IsNullOrEmpty(cdnUrl)) return string.Empty;
+            return $"{cdnUrl}/{hash[0]}/{hash}";
+        }
+
         // Build a response for every requested hash (unknowns => FileExists=false, not 500)
         List<DownloadFileDto> response = new(requested.Count);
         foreach (var hash in requested)
@@ -138,6 +149,7 @@ public class ServerFilesController : ControllerBase
                 Hash = hash,
                 Size = exists ? size : 0,
                 Url = exists ? (baseUrl?.ToString() ?? string.Empty) : string.Empty,
+                DirectDownloadUrl = exists && forbiddenFile == null ? BuildDirectDownloadUrl(hash) : string.Empty,
             });
         }
 
@@ -319,6 +331,8 @@ public class ServerFilesController : ControllerBase
 
             _metricsClient.IncGauge(MetricsAPI.GaugeFilesTotal, 1);
             _metricsClient.IncGauge(MetricsAPI.GaugeFilesTotalSize, compressedSize);
+
+            _scalewayStorage.QueueUpload(hash, path);
 
             _fileUploadLocks.TryRemove(hash, out _);
 

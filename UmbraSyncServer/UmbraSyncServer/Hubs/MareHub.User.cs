@@ -233,6 +233,14 @@ public partial class MareHub
         {
             rpData = await DbContext.CharacterRpProfiles.SingleOrDefaultAsync(u => u.UserUID == user.User.UID && u.CharacterName == user.CharacterName && u.WorldId == user.WorldId).ConfigureAwait(false);
         }
+        else
+        {
+            rpData = await DbContext.CharacterRpProfiles
+                .Where(u => u.UserUID == user.User.UID)
+                .OrderByDescending(u => u.Id)
+                .FirstOrDefaultAsync()
+                .ConfigureAwait(false);
+        }
 
         if (hrpData == null && rpData == null) return new UserProfileDto(user.User, false, null, null, null);
 
@@ -244,7 +252,7 @@ public partial class MareHub
             rpData?.RpFirstName, rpData?.RpLastName, rpData?.RpTitle, rpData?.RpAge,
             rpData?.RpHeight, rpData?.RpBuild, rpData?.RpOccupation, rpData?.RpAffiliation,
             rpData?.RpAlignment, rpData?.RpAdditionalInfo,
-            user.CharacterName, user.WorldId);
+            rpData?.CharacterName, rpData?.WorldId);
     }
 
     [Authorize(Policy = "Identified")]
@@ -307,17 +315,42 @@ public partial class MareHub
             + string.Join(Environment.NewLine, invalidFileSwapPaths.Select(p => "Invalid FileSwap Path: " + p)));
         }
 
-        var allPairedUsers = await GetAllPairedUnpausedUsers().ConfigureAwait(false);
-        var idents = await GetOnlineUsers(allPairedUsers).ConfigureAwait(false);
+        var recipientUids = dto.Recipients.Select(r => r.UID).ToList();
 
-        var recipients = allPairedUsers.Where(f => dto.Recipients.Select(r => r.UID).Contains(f, StringComparer.Ordinal)).ToList();
+        bool allCached = await _pairCacheService
+            .AreAllPlayersCached(UserUID, recipientUids, Context.ConnectionAborted)
+            .ConfigureAwait(false);
 
-        _logger.LogCallInfo(MareHubLogger.Args(idents.Count, recipients.Count()));
+        List<string> validRecipients;
+        if (!allCached)
+        {
+            var allPairedUsers = await GetAllPairedUnpausedUsers().ConfigureAwait(false);
+            validRecipients = allPairedUsers
+                .Where(uid => recipientUids.Contains(uid, StringComparer.Ordinal))
+                .ToList();
 
-        await Clients.Users(recipients).Client_UserReceiveCharacterData(new OnlineUserCharaDataDto(new UserData(UserUID), dto.CharaData)).ConfigureAwait(false);
+            await _pairCacheService
+                .CachePlayers(UserUID, allPairedUsers, Context.ConnectionAborted)
+                .ConfigureAwait(false);
+
+            _logger.LogCallInfo(MareHubLogger.Args("cache_miss", "pairs", allPairedUsers.Count, "recipients", validRecipients.Count));
+        }
+        else
+        {
+            validRecipients = recipientUids;
+            _logger.LogCallInfo(MareHubLogger.Args("cache_hit", "recipients", validRecipients.Count));
+        }
+
+        if (validRecipients.Count == 0)
+        {
+            _logger.LogCallWarning(MareHubLogger.Args("no_recipients", "requested", recipientUids.Count));
+        }
+
+        await Clients.Users(validRecipients).Client_UserReceiveCharacterData(
+            new OnlineUserCharaDataDto(new UserData(UserUID), dto.CharaData)).ConfigureAwait(false);
 
         _mareMetrics.IncCounter(MetricsAPI.CounterUserPushData);
-        _mareMetrics.IncCounter(MetricsAPI.CounterUserPushDataTo, recipients.Count());
+        _mareMetrics.IncCounter(MetricsAPI.CounterUserPushDataTo, validRecipients.Count);
     }
 
     [Authorize(Policy = "Identified")]

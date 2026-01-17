@@ -17,8 +17,6 @@ public partial class MareHub
     {
         _logger.LogCallInfo(MareHubLogger.Args(isTyping, scope));
 
-        var pairedEntries = await GetAllPairedClientsWithPauseState().ConfigureAwait(false);
-
         var sender = await DbContext.Users.AsNoTracking()
             .SingleAsync(u => u.UID == UserUID)
             .ConfigureAwait(false);
@@ -27,16 +25,24 @@ public partial class MareHub
         var typingDto = new TypingStateDto(sender.ToUserData(), isTyping, normalizedScope);
 
         await Clients.Caller.Client_UserTypingState(typingDto).ConfigureAwait(false);
+        
+        if (normalizedScope == TypingScope.Proximity || normalizedScope == TypingScope.Unknown)
+        {
+            var pairedEntries = await GetAllPairedClientsWithPauseState().ConfigureAwait(false);
+            var recipients = pairedEntries
+                .Where(p => !p.IsPaused)
+                .Select(p => p.UID)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
 
-        var recipients = pairedEntries
-            .Where(p => !p.IsPaused)
-            .Select(p => p.UID)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-
-        if (recipients.Count == 0)
-            return;
-
-        await Clients.Users(recipients).Client_UserTypingState(typingDto).ConfigureAwait(false);
+            if (recipients.Count > 0)
+            {
+                await Clients.Users(recipients).Client_UserTypingState(typingDto).ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            _logger.LogCallWarning(MareHubLogger.Args("UserSetTypingState called with scoped channel without channelId, ignoring", scope));
+        }
     }
 }

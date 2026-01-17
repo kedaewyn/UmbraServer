@@ -32,6 +32,7 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
     private readonly int _absoluteMaxGroupUserCount;
     private readonly IRedisDatabase _redis;
     private readonly GPoseLobbyDistributionService _gPoseLobbyDistributionService;
+    private readonly OnlineSyncedPairCacheService _pairCacheService;
     private readonly Uri _fileServerAddress;
     private readonly Version _expectedClientVersion;
     private readonly int _maxCharaDataByUser;
@@ -45,7 +46,7 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
         IDbContextFactory<MareDbContext> mareDbContextFactory, ILogger<MareHub> logger, SystemInfoService systemInfoService,
         IConfigurationService<ServerConfiguration> configuration, IHttpContextAccessor contextAccessor,
         IRedisDatabase redisDb, GPoseLobbyDistributionService gPoseLobbyDistributionService,
-        AutoDetectScheduleCache autoDetectScheduleCache)
+        AutoDetectScheduleCache autoDetectScheduleCache, OnlineSyncedPairCacheService pairCacheService)
     {
         _mareMetrics = mareMetrics;
         _systemInfoService = systemInfoService;
@@ -61,6 +62,7 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
         _contextAccessor = contextAccessor;
         _redis = redisDb;
         _gPoseLobbyDistributionService = gPoseLobbyDistributionService;
+        _pairCacheService = pairCacheService;
         _autoDetectScheduleCache = autoDetectScheduleCache;
         _logger = new MareHubLogger(this, logger);
         _dbContextLazy = new Lazy<MareDbContext>(() => mareDbContextFactory.CreateDbContext());
@@ -123,6 +125,7 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
             }
 
             await UpdateUserOnRedis().ConfigureAwait(false);
+            await _redis.AddAsync($"active:{UserCharaIdent}", Context.ConnectionId, expiresIn: TimeSpan.FromMinutes(5)).ConfigureAwait(false);
             return true;
         }
         catch
@@ -140,10 +143,12 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
         {
             _logger.LogCallInfo(MareHubLogger.Args(_contextAccessor.GetIpAddress(), UserCharaIdent));
 
+            await _pairCacheService.InitPlayer(UserUID).ConfigureAwait(false);
             await UpdateUserOnRedis().ConfigureAwait(false);
             try
             {
                 await _redis.SetAddAsync($"connections:{UserCharaIdent}", Context.ConnectionId).ConfigureAwait(false);
+                await _redis.AddAsync($"active:{UserCharaIdent}", Context.ConnectionId, expiresIn: TimeSpan.FromMinutes(5)).ConfigureAwait(false);
                 var connections = await _redis.SetMembersAsync<string>($"connections:{UserCharaIdent}").ConfigureAwait(false);
 
                 if (connections?.Length == 1)
@@ -191,9 +196,18 @@ public partial class MareHub : Hub<IMareHub>, IMareHub
                 var connections = await _redis.SetMembersAsync<string>($"connections:{UserCharaIdent}").ConfigureAwait(false);
                 if (connections == null || connections.Length == 0)
                 {
-                    await GposeLobbyLeave().ConfigureAwait(false);
-                    await RemoveUserFromRedis().ConfigureAwait(false);
-                    await SendOfflineToAllPairedUsers().ConfigureAwait(false);
+                    var activeConnectionId = await _redis.GetAsync<string>($"active:{UserCharaIdent}").ConfigureAwait(false);
+                    if (string.IsNullOrEmpty(activeConnectionId) || string.Equals(activeConnectionId, Context.ConnectionId, StringComparison.Ordinal))
+                    {
+                        await GposeLobbyLeave().ConfigureAwait(false);
+                        await RemoveUserFromRedis().ConfigureAwait(false);
+                        await SendOfflineToAllPairedUsers().ConfigureAwait(false);
+                        await _pairCacheService.DisposePlayer(UserUID).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        _logger.LogCallWarning(MareHubLogger.Args("ObsoleteConnectionId", Context.ConnectionId, "Active", activeConnectionId));
+                    }
                 }
             }
             catch { }

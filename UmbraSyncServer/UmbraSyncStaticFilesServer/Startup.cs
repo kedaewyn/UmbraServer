@@ -85,6 +85,8 @@ public class Startup
 
         // generic services
         services.AddSingleton<CachedFileProvider>();
+        services.AddSingleton<ScalewayStorageService>();
+        services.AddHostedService(p => p.GetService<ScalewayStorageService>()!);
         services.AddHostedService<FileCleanupService>();
         services.AddSingleton<FileStatisticsService>();
         services.AddSingleton<RequestBlockFileListResultFactory>();
