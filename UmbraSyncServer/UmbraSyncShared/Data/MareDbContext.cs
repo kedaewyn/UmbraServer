@@ -57,6 +57,7 @@ public class MareDbContext : DbContext
     public DbSet<McdfShare> McdfShares { get; set; }
     public DbSet<McdfShareAllowedUser> McdfShareAllowedUsers { get; set; }
     public DbSet<McdfShareAllowedGroup> McdfShareAllowedGroups { get; set; }
+    public DbSet<GroupProfile> GroupProfiles { get; set; }
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -110,6 +111,13 @@ public class MareDbContext : DbContext
         mb.Entity<GroupTempInvite>().HasKey(u => new { u.GroupGID, u.Invite });
         mb.Entity<GroupTempInvite>().HasIndex(c => c.GroupGID);
         mb.Entity<GroupTempInvite>().HasIndex(c => c.Invite);
+        mb.Entity<GroupProfile>().ToTable("group_profiles");
+        mb.Entity<GroupProfile>().HasKey(p => p.GroupGID);
+        mb.Entity<GroupProfile>().HasOne(p => p.Group).WithOne().HasForeignKey<GroupProfile>(p => p.GroupGID).OnDelete(DeleteBehavior.Cascade);
+        mb.Entity<GroupProfile>().Property(p => p.Description).HasColumnType("text");
+        mb.Entity<GroupProfile>().Property(p => p.Tags).HasColumnType("text[]");
+        mb.Entity<GroupProfile>().Property(p => p.Base64ProfileImage).HasColumnType("text");
+        mb.Entity<GroupProfile>().Property(p => p.Base64BannerImage).HasColumnType("text");
     }
 
     private static void ConfigureUserProfileEntities(ModelBuilder mb)

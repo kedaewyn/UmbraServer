@@ -1,7 +1,6 @@
 ﻿using UmbraSync.API.Data;
 using UmbraSync.API.Data.Enum;
 using UmbraSync.API.Data.Extensions;
-using UmbraSync.API.Dto.Chat;
 using UmbraSync.API.Dto.Group;
 using MareSynchronosServer.Utils;
 using MareSynchronosShared.Models;
@@ -583,17 +582,36 @@ public partial class MareHub
             .ToDictionaryAsync(k => k.Key, k => k.Count, StringComparer.OrdinalIgnoreCase)
             .ConfigureAwait(false);
 
-        return groups.Select(g => new SyncshellDiscoveryEntryDto
-        {
-            GID = g.GID,
-            Alias = g.Alias,
-            OwnerUID = g.OwnerUID,
-            OwnerAlias = g.Owner.Alias,
-            MemberCount = memberCounts.TryGetValue(g.GID, out var count) ? count : 0,
-            AutoAcceptPairs = g.InvitesEnabled,
-            Description = null,
-            MaxUserCount = Math.Min(g.MaxUserCount > 0 ? g.MaxUserCount : _defaultGroupUserCount, _absoluteMaxGroupUserCount),
-        }).ToList();
+        // Load group profiles for discovery enrichment
+        var profiles = await DbContext.GroupProfiles.AsNoTracking()
+            .Where(p => groupIds.Contains(p.GroupGID))
+            .ToDictionaryAsync(p => p.GroupGID, StringComparer.OrdinalIgnoreCase)
+            .ConfigureAwait(false);
+
+        return groups
+            .Where(g =>
+            {
+                // Exclude groups with disabled profiles
+                if (profiles.TryGetValue(g.GID, out var p) && p.IsDisabled) return false;
+                return true;
+            })
+            .Select(g =>
+            {
+                profiles.TryGetValue(g.GID, out var profile);
+                return new SyncshellDiscoveryEntryDto
+                {
+                    GID = g.GID,
+                    Alias = g.Alias,
+                    OwnerUID = g.OwnerUID,
+                    OwnerAlias = g.Owner.Alias,
+                    MemberCount = memberCounts.TryGetValue(g.GID, out var count) ? count : 0,
+                    AutoAcceptPairs = g.InvitesEnabled,
+                    Description = profile?.Description,
+                    MaxUserCount = Math.Min(g.MaxUserCount > 0 ? g.MaxUserCount : _defaultGroupUserCount, _absoluteMaxGroupUserCount),
+                    IsNsfw = profile?.IsNSFW ?? false,
+                    Tags = profile?.Tags,
+                };
+            }).ToList();
     }
 
     [Authorize(Policy = "Identified")]
@@ -606,11 +624,23 @@ public partial class MareHub
 
         var schedule = _autoDetectScheduleCache.Get(group.GID);
 
+        // Determine effective mode from schedule state
+        AutoDetectMode mode;
+        if (!group.AutoDetectVisible && schedule == null)
+            mode = AutoDetectMode.Off;
+        else if (schedule == null)
+            mode = AutoDetectMode.Fulltime;
+        else if (schedule.Recurring)
+            mode = AutoDetectMode.Recurring;
+        else
+            mode = AutoDetectMode.Duration;
+
         return new SyncshellDiscoveryStateDto
         {
             GID = group.GID,
             AutoDetectVisible = group.AutoDetectVisible,
             PasswordTemporarilyDisabled = group.PasswordTemporarilyDisabled,
+            Mode = mode,
             DisplayDurationHours = schedule?.DisplayDurationHours,
             ActiveWeekdays = schedule?.ActiveWeekdays,
             TimeStartLocal = schedule?.TimeStartLocal,
@@ -722,6 +752,26 @@ public partial class MareHub
                 if (string.Equals(start, end, StringComparison.Ordinal)) return false;
                 recurring = true;
                 break;
+
+            case AutoDetectMode.Fulltime:
+                // Permanent visibility: clear any schedule and set visible immediately
+                _autoDetectScheduleCache.Clear(group.GID);
+                group.AutoDetectVisible = true;
+                group.PasswordTemporarilyDisabled = true;
+                await DbContext.SaveChangesAsync().ConfigureAwait(false);
+                await DbContext.Entry(group).Reference(g => g.Owner).LoadAsync().ConfigureAwait(false);
+                {
+                    var pairs = await DbContext.GroupPairs.AsNoTracking().Where(p => p.GroupGID == group.GID).Select(p => p.GroupUserUID).ToListAsync().ConfigureAwait(false);
+                    await Clients.Users(pairs).Client_GroupSendInfo(new GroupInfoDto(group.ToGroupData(), group.Owner.ToUserData(), group.GetGroupPermissions())
+                    {
+                        IsTemporary = group.IsTemporary,
+                        ExpiresAt = group.ExpiresAt,
+                        AutoDetectVisible = group.AutoDetectVisible,
+                        PasswordTemporarilyDisabled = group.PasswordTemporarilyDisabled,
+                        MaxUserCount = Math.Min(group.MaxUserCount > 0 ? group.MaxUserCount : _defaultGroupUserCount, _absoluteMaxGroupUserCount),
+                    }).ConfigureAwait(false);
+                }
+                return true;
 
             default:
                 return false;
@@ -1034,6 +1084,130 @@ public partial class MareHub
         var group = await DbContext.Groups.SingleAsync(g => g.GID == dto.Group.GID).ConfigureAwait(false);
         var allPairs = await DbContext.GroupPairs.Include(g => g.GroupUser).Where(g => g.GroupGID == dto.Group.GID && g.GroupUserUID != UserUID).AsNoTracking().ToListAsync().ConfigureAwait(false);
         return allPairs.Select(p => new GroupPairFullInfoDto(group.ToGroupData(), p.GroupUser.ToUserData(), p.GetGroupPairUserInfo(), p.GetGroupPairPermissions())).ToList();
+    }
+
+    [Authorize(Policy = "Identified")]
+    public async Task<GroupProfileDto?> GroupGetProfile(GroupDto dto)
+    {
+        _logger.LogCallInfo(MareHubLogger.Args(dto));
+
+        var (inGroup, _) = await TryValidateUserInGroup(dto.Group.GID).ConfigureAwait(false);
+        if (!inGroup) return null;
+
+        var profile = await DbContext.GroupProfiles.AsNoTracking()
+            .SingleOrDefaultAsync(p => p.GroupGID == dto.Group.GID).ConfigureAwait(false);
+
+        if (profile == null)
+        {
+            return new GroupProfileDto { Group = dto.Group };
+        }
+
+        if (profile.IsDisabled)
+        {
+            return new GroupProfileDto { Group = dto.Group, IsDisabled = true };
+        }
+
+        return new GroupProfileDto
+        {
+            Group = dto.Group,
+            Description = profile.Description,
+            Tags = profile.Tags,
+            ProfileImageBase64 = profile.Base64ProfileImage,
+            BannerImageBase64 = profile.Base64BannerImage,
+            IsNsfw = profile.IsNSFW,
+            IsDisabled = false,
+        };
+    }
+
+    [Authorize(Policy = "Identified")]
+    public async Task GroupSetProfile(GroupProfileDto dto)
+    {
+        if (dto.Group == null) return;
+
+        _logger.LogCallInfo(MareHubLogger.Args(dto.Group));
+
+        var (hasRights, group) = await TryValidateGroupModeratorOrOwner(dto.Group.GID).ConfigureAwait(false);
+        if (!hasRights) return;
+
+        // Validate description
+        var description = dto.Description;
+        if (description != null && description.Length > 1500)
+        {
+            description = description[..1500];
+        }
+
+        // Validate tags
+        var tags = dto.Tags;
+        if (tags != null)
+        {
+            tags = tags.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Length > 50 ? t[..50] : t).Take(20).ToArray();
+            if (tags.Length == 0) tags = null;
+        }
+
+        // Validate images (size check only — full validation would use ImageSharp)
+        var profileImage = dto.ProfileImageBase64;
+        if (profileImage != null)
+        {
+            try
+            {
+                var bytes = Convert.FromBase64String(profileImage);
+                if (bytes.Length > 2 * 1024 * 1024) profileImage = null;
+            }
+            catch { profileImage = null; }
+        }
+
+        var bannerImage = dto.BannerImageBase64;
+        if (bannerImage != null)
+        {
+            try
+            {
+                var bytes = Convert.FromBase64String(bannerImage);
+                if (bytes.Length > 2 * 1024 * 1024) bannerImage = null;
+            }
+            catch { bannerImage = null; }
+        }
+
+        var profile = await DbContext.GroupProfiles
+            .SingleOrDefaultAsync(p => p.GroupGID == dto.Group.GID).ConfigureAwait(false);
+
+        if (profile == null)
+        {
+            profile = new GroupProfile
+            {
+                GroupGID = dto.Group.GID,
+            };
+            DbContext.GroupProfiles.Add(profile);
+        }
+
+        profile.Description = description;
+        profile.Tags = tags;
+        profile.Base64ProfileImage = profileImage;
+        profile.Base64BannerImage = bannerImage;
+        profile.IsNSFW = dto.IsNsfw;
+        profile.IsDisabled = dto.IsDisabled;
+
+        await DbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        // Broadcast to all group members
+        var resultDto = new GroupProfileDto
+        {
+            Group = dto.Group,
+            Description = profile.Description,
+            Tags = profile.Tags,
+            ProfileImageBase64 = profile.Base64ProfileImage,
+            BannerImageBase64 = profile.Base64BannerImage,
+            IsNsfw = profile.IsNSFW,
+            IsDisabled = profile.IsDisabled,
+        };
+
+        var groupPairs = await DbContext.GroupPairs.AsNoTracking()
+            .Where(p => p.GroupGID == dto.Group.GID)
+            .Select(p => p.GroupUserUID)
+            .ToListAsync().ConfigureAwait(false);
+
+        await Clients.Users(groupPairs).Client_GroupSendProfile(resultDto).ConfigureAwait(false);
+
+        _logger.LogCallInfo(MareHubLogger.Args(dto.Group, "Success"));
     }
 
     [Authorize(Policy = "Identified")]

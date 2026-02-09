@@ -2,8 +2,8 @@
 using UmbraSync.API.Data.Enum;
 using UmbraSync.API.Dto;
 using UmbraSync.API.Dto.CharaData;
-using UmbraSync.API.Dto.Chat;
 using UmbraSync.API.Dto.Group;
+using UmbraSync.API.Dto.Ping;
 using UmbraSync.API.Dto.User;
 
 namespace MareSynchronosServer.Hubs
@@ -13,8 +13,6 @@ namespace MareSynchronosServer.Hubs
         public Task Client_DownloadReady(Guid requestId) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
         public Task Client_GroupChangePermissions(GroupPermissionDto groupPermission) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
-
-        public Task Client_GroupChatMsg(GroupChatMsgDto groupChatMsgDto) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
         public Task Client_GroupDelete(GroupDto groupDto) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
@@ -30,13 +28,13 @@ namespace MareSynchronosServer.Hubs
 
         public Task Client_GroupSendInfo(GroupInfoDto dto) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
+        public Task Client_GroupSendProfile(GroupProfileDto profile) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
+
         public Task Client_ReceiveServerMessage(MessageSeverity messageSeverity, string message) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
         public Task Client_UpdateSystemInfo(SystemInfoDto systemInfo) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
         public Task Client_UserAddClientPair(UserPairDto dto) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
-
-        public Task Client_UserChatMsg(UserChatMsgDto userChatMsgDto) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
         public Task Client_UserReceiveCharacterData(OnlineUserCharaDataDto dataDto) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
@@ -55,6 +53,10 @@ namespace MareSynchronosServer.Hubs
         public Task Client_UserUpdateSelfPairPermissions(UserPermissionsDto dto) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
         public Task Client_UserTypingState(TypingStateDto dto) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
+
+        public Task Client_GroupReceivePing(GroupPingMarkerDto dto) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
+        public Task Client_GroupRemovePing(GroupData group, UserData sender, PingMarkerRemoveDto remove) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
+        public Task Client_GroupClearPings(GroupData group) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
         public Task Client_GposeLobbyJoin(UserData userData) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
         public Task Client_GposeLobbyLeave(UserData userData) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
