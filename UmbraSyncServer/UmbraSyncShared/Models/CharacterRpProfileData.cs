@@ -34,4 +34,5 @@ public class CharacterRpProfileData
     public string? RpAdditionalInfo { get; set; }
     public string? RpNameColor { get; set; }
     public string? RpCustomFields { get; set; }
+    public string? MoodlesData { get; set; }
 }
