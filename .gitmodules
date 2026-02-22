@@ -1,4 +1,4 @@
 [submodule "UmbraAPI"]
 	path = UmbraAPI
-	url = git@github.com:umbrasys/UmbraAPI.git
+	url = git@github.com:kedaewyn/UmbraAPI.git
 	branch = main
