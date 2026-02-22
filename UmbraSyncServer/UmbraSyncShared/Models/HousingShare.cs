@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 
 namespace MareSynchronosShared.Models;
@@ -24,4 +25,22 @@ public class HousingShare
     public byte[] Tag { get; set; } = Array.Empty<byte>();
     public DateTime CreatedUtc { get; set; }
     public DateTime? UpdatedUtc { get; set; }
+    public ICollection<HousingShareAllowedUser> AllowedIndividuals { get; set; } = new HashSet<HousingShareAllowedUser>();
+    public ICollection<HousingShareAllowedGroup> AllowedSyncshells { get; set; } = new HashSet<HousingShareAllowedGroup>();
+}
+
+public class HousingShareAllowedUser
+{
+    public Guid ShareId { get; set; }
+    public HousingShare Share { get; set; } = null!;
+    [MaxLength(10)]
+    public string AllowedIndividualUid { get; set; } = string.Empty;
+}
+
+public class HousingShareAllowedGroup
+{
+    public Guid ShareId { get; set; }
+    public HousingShare Share { get; set; } = null!;
+    [MaxLength(20)]
+    public string AllowedGroupGid { get; set; } = string.Empty;
 }

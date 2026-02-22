@@ -59,6 +59,8 @@ public class MareDbContext : DbContext
     public DbSet<McdfShareAllowedGroup> McdfShareAllowedGroups { get; set; }
     public DbSet<GroupProfile> GroupProfiles { get; set; }
     public DbSet<HousingShare> HousingShares { get; set; }
+    public DbSet<HousingShareAllowedUser> HousingShareAllowedUsers { get; set; }
+    public DbSet<HousingShareAllowedGroup> HousingShareAllowedGroups { get; set; }
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -226,5 +228,15 @@ public class MareDbContext : DbContext
         mb.Entity<HousingShare>().Property(s => s.Tag).HasColumnType("bytea");
         mb.Entity<HousingShare>().Property(s => s.CreatedUtc).HasColumnType("timestamp with time zone");
         mb.Entity<HousingShare>().Property(s => s.UpdatedUtc).HasColumnType("timestamp with time zone");
+        mb.Entity<HousingShare>().HasMany(s => s.AllowedIndividuals).WithOne(a => a.Share).HasForeignKey(a => a.ShareId).OnDelete(DeleteBehavior.Cascade);
+        mb.Entity<HousingShare>().HasMany(s => s.AllowedSyncshells).WithOne(a => a.Share).HasForeignKey(a => a.ShareId).OnDelete(DeleteBehavior.Cascade);
+
+        mb.Entity<HousingShareAllowedUser>().ToTable("housing_share_allowed_users");
+        mb.Entity<HousingShareAllowedUser>().HasKey(u => new { u.ShareId, u.AllowedIndividualUid });
+        mb.Entity<HousingShareAllowedUser>().HasIndex(u => u.AllowedIndividualUid);
+
+        mb.Entity<HousingShareAllowedGroup>().ToTable("housing_share_allowed_groups");
+        mb.Entity<HousingShareAllowedGroup>().HasKey(g => new { g.ShareId, g.AllowedGroupGid });
+        mb.Entity<HousingShareAllowedGroup>().HasIndex(g => g.AllowedGroupGid);
     }
 }
