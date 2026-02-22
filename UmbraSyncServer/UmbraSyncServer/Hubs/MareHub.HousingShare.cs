@@ -18,7 +18,20 @@ public partial class MareHub
     {
         _logger.LogCallInfo(MareHubLogger.Args(dto.ShareId));
 
+        var normalizedUsers = dto.AllowedIndividuals
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(NormalizeUid)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var normalizedGroups = dto.AllowedSyncshells
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(NormalizeGroup)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
         var share = await DbContext.HousingShares
+            .Include(s => s.AllowedIndividuals)
+            .Include(s => s.AllowedSyncshells)
             .SingleOrDefaultAsync(s => s.Id == dto.ShareId)
             .ConfigureAwait(false);
 
@@ -53,6 +66,26 @@ public partial class MareHub
         share.Tag = dto.Tag ?? Array.Empty<byte>();
         share.UpdatedUtc = now;
 
+        share.AllowedIndividuals.Clear();
+        foreach (var uid in normalizedUsers)
+        {
+            share.AllowedIndividuals.Add(new HousingShareAllowedUser
+            {
+                ShareId = share.Id,
+                AllowedIndividualUid = uid,
+            });
+        }
+
+        share.AllowedSyncshells.Clear();
+        foreach (var gid in normalizedGroups)
+        {
+            share.AllowedSyncshells.Add(new HousingShareAllowedGroup
+            {
+                ShareId = share.Id,
+                AllowedGroupGid = gid,
+            });
+        }
+
         await DbContext.SaveChangesAsync().ConfigureAwait(false);
     }
 
@@ -61,11 +94,27 @@ public partial class MareHub
     {
         _logger.LogCallInfo(MareHubLogger.Args(shareId));
 
-        var share = await DbContext.HousingShares.AsNoTracking()
+        var share = await DbContext.HousingShares
+            .Include(s => s.AllowedIndividuals)
+            .Include(s => s.AllowedSyncshells)
             .SingleOrDefaultAsync(s => s.Id == shareId)
             .ConfigureAwait(false);
 
         if (share == null) return null;
+
+        bool isOwner = string.Equals(share.OwnerUID, UserUID, StringComparison.Ordinal);
+        if (!isOwner && HousingShareHasAccessRestrictions(share))
+        {
+            var userGroups = await DbContext.GroupPairs.AsNoTracking()
+                .Where(p => p.GroupUserUID == UserUID)
+                .Select(p => p.GroupGID.ToUpperInvariant())
+                .ToListAsync().ConfigureAwait(false);
+
+            if (!HousingShareAccessibleToUser(share, userGroups))
+            {
+                return null;
+            }
+        }
 
         return new HousingSharePayloadDto
         {
@@ -84,6 +133,8 @@ public partial class MareHub
 
         var shares = await DbContext.HousingShares.AsNoTracking()
             .Include(s => s.Owner)
+            .Include(s => s.AllowedIndividuals)
+            .Include(s => s.AllowedSyncshells)
             .Where(s => s.OwnerUID == UserUID)
             .OrderByDescending(s => s.CreatedUtc)
             .ToListAsync().ConfigureAwait(false);
@@ -98,6 +149,8 @@ public partial class MareHub
 
         var shares = await DbContext.HousingShares.AsNoTracking()
             .Include(s => s.Owner)
+            .Include(s => s.AllowedIndividuals)
+            .Include(s => s.AllowedSyncshells)
             .Where(s => s.ServerId == location.ServerId
                 && s.TerritoryId == location.TerritoryId
                 && s.DivisionId == location.DivisionId
@@ -106,7 +159,72 @@ public partial class MareHub
             .OrderByDescending(s => s.CreatedUtc)
             .ToListAsync().ConfigureAwait(false);
 
-        return shares.Select(s => MapHousingShareEntryDto(s, string.Equals(s.OwnerUID, UserUID, StringComparison.Ordinal))).ToList();
+        var userGroups = await DbContext.GroupPairs.AsNoTracking()
+            .Where(p => p.GroupUserUID == UserUID)
+            .Select(p => p.GroupGID.ToUpperInvariant())
+            .ToListAsync().ConfigureAwait(false);
+
+        var accessible = shares.Where(s =>
+        {
+            bool isOwner = string.Equals(s.OwnerUID, UserUID, StringComparison.Ordinal);
+            if (isOwner) return true;
+            if (!HousingShareHasAccessRestrictions(s)) return true;
+            return HousingShareAccessibleToUser(s, userGroups);
+        }).ToList();
+
+        return accessible.Select(s => MapHousingShareEntryDto(s, string.Equals(s.OwnerUID, UserUID, StringComparison.Ordinal))).ToList();
+    }
+
+    [Authorize(Policy = "Identified")]
+    public async Task<HousingShareEntryDto?> HousingShareUpdate(HousingShareUpdateRequestDto dto)
+    {
+        _logger.LogCallInfo(MareHubLogger.Args(dto.ShareId));
+
+        var share = await DbContext.HousingShares
+            .Include(s => s.AllowedIndividuals)
+            .Include(s => s.AllowedSyncshells)
+            .Include(s => s.Owner)
+            .SingleOrDefaultAsync(s => s.Id == dto.ShareId && s.OwnerUID == UserUID)
+            .ConfigureAwait(false);
+
+        if (share == null) return null;
+
+        share.Description = dto.Description ?? string.Empty;
+        share.UpdatedUtc = DateTime.UtcNow;
+
+        var normalizedUsers = dto.AllowedIndividuals
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(NormalizeUid)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var normalizedGroups = dto.AllowedSyncshells
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(NormalizeGroup)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        share.AllowedIndividuals.Clear();
+        foreach (var uid in normalizedUsers)
+        {
+            share.AllowedIndividuals.Add(new HousingShareAllowedUser
+            {
+                ShareId = share.Id,
+                AllowedIndividualUid = uid,
+            });
+        }
+
+        share.AllowedSyncshells.Clear();
+        foreach (var gid in normalizedGroups)
+        {
+            share.AllowedSyncshells.Add(new HousingShareAllowedGroup
+            {
+                ShareId = share.Id,
+                AllowedGroupGid = gid,
+            });
+        }
+
+        await DbContext.SaveChangesAsync().ConfigureAwait(false);
+        return MapHousingShareEntryDto(share, true);
     }
 
     [Authorize(Policy = "Identified")]
@@ -143,6 +261,25 @@ public partial class MareHub
             IsOwner = isOwner,
             OwnerUid = share.OwnerUID,
             OwnerAlias = share.Owner?.Alias ?? string.Empty,
+            AllowedIndividuals = share.AllowedIndividuals.Select(i => i.AllowedIndividualUid).OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList(),
+            AllowedSyncshells = share.AllowedSyncshells.Select(g => g.AllowedGroupGid).OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList(),
         };
+    }
+
+    private static bool HousingShareHasAccessRestrictions(HousingShare share)
+    {
+        return share.AllowedIndividuals.Count > 0 || share.AllowedSyncshells.Count > 0;
+    }
+
+    private bool HousingShareAccessibleToUser(HousingShare share, IReadOnlyCollection<string> userGroups)
+    {
+        if (string.Equals(share.OwnerUID, UserUID, StringComparison.Ordinal)) return true;
+
+        bool allowedByUser = share.AllowedIndividuals.Any(i => string.Equals(i.AllowedIndividualUid, UserUID, StringComparison.OrdinalIgnoreCase));
+        if (allowedByUser) return true;
+
+        if (share.AllowedSyncshells.Count == 0) return false;
+        var allowedGroups = share.AllowedSyncshells.Select(g => g.AllowedGroupGid).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return userGroups.Any(g => allowedGroups.Contains(g));
     }
 }
