@@ -3,7 +3,6 @@ using UmbraSync.API.Data.Enum;
 using UmbraSync.API.Dto;
 using UmbraSync.API.Dto.CharaData;
 using UmbraSync.API.Dto.Group;
-using UmbraSync.API.Dto.Ping;
 using UmbraSync.API.Dto.QuestSync;
 using UmbraSync.API.Dto.User;
 
@@ -55,9 +54,6 @@ namespace MareSynchronosServer.Hubs
 
         public Task Client_UserTypingState(TypingStateDto dto) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
-        public Task Client_GroupReceivePing(GroupPingMarkerDto dto) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
-        public Task Client_GroupRemovePing(GroupData group, UserData sender, PingMarkerRemoveDto remove) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
-        public Task Client_GroupClearPings(GroupData group) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
 
         public Task Client_GposeLobbyJoin(UserData userData) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
         public Task Client_GposeLobbyLeave(UserData userData) => throw new PlatformNotSupportedException("Calling clientside method on server not supported");
