@@ -1050,14 +1050,6 @@ public partial class MareHub
             userPair.IsModerator = false;
         }
 
-        if (dto.GroupUserInfo.HasFlag(GroupUserInfo.CanPlacePings) && userIsModerator && !userPair.CanPlacePings)
-        {
-            userPair.CanPlacePings = true;
-        }
-        else if (userIsModerator && userPair.CanPlacePings)
-        {
-            userPair.CanPlacePings = false;
-        }
 
         await DbContext.SaveChangesAsync().ConfigureAwait(false);
 
