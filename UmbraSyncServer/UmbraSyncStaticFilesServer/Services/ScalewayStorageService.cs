@@ -141,32 +141,49 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
         var bucketName = _config.GetValue<string>(nameof(StaticFilesServerConfiguration.ScalewayBucketName));
         var key = GetS3Key(hash);
 
-        try
+        const int maxRetries = 5;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
-            if (!File.Exists(filePath))
+            try
             {
-                _logger.LogWarning("File {FilePath} no longer exists, skipping upload", filePath);
+                if (!File.Exists(filePath))
+                {
+                    _logger.LogWarning("File {FilePath} no longer exists, skipping upload", filePath);
+                    return;
+                }
+
+                using var transferUtility = new TransferUtility(_s3Client);
+                var uploadRequest = new TransferUtilityUploadRequest
+                {
+                    FilePath = filePath,
+                    BucketName = bucketName,
+                    Key = key,
+                    ContentType = "application/octet-stream",
+                    StorageClass = S3StorageClass.Standard,
+                    CannedACL = S3CannedACL.PublicRead
+                };
+
+                await transferUtility.UploadAsync(uploadRequest, ct).ConfigureAwait(false);
+                _logger.LogInformation("Successfully uploaded {Hash} to Scaleway", hash);
                 return;
             }
-
-            using var transferUtility = new TransferUtility(_s3Client);
-            var uploadRequest = new TransferUtilityUploadRequest
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                FilePath = filePath,
-                BucketName = bucketName,
-                Key = key,
-                ContentType = "application/octet-stream",
-                StorageClass = S3StorageClass.Standard,
-                CannedACL = S3CannedACL.PublicRead
-            };
-
-            await transferUtility.UploadAsync(uploadRequest, ct).ConfigureAwait(false);
-            _logger.LogInformation("Successfully uploaded {Hash} to Scaleway", hash);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogError(ex, "Failed to upload {Hash} to Scaleway, will retry on next server restart", hash);
-            _uploadQueue.Enqueue((hash, filePath));
+                if (attempt < maxRetries)
+                {
+                    var delay = TimeSpan.FromSeconds(5 * attempt);
+                    _logger.LogWarning(ex, "Failed to upload {Hash} to Scaleway (attempt {Attempt}/{MaxRetries}), retrying in {Delay}s",
+                        hash, attempt, maxRetries, delay.TotalSeconds);
+                    await Task.Delay(delay, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    _logger.LogError(ex, "Failed to upload {Hash} to Scaleway after {MaxRetries} attempts, re-queuing for later retry",
+                        hash, maxRetries);
+                    _uploadQueue.Enqueue((hash, filePath));
+                }
+            }
         }
     }
 
