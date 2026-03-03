@@ -17,8 +17,12 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
     private IAmazonS3? _s3Client;
     private Task? _processingTask;
     private Task? _periodicScanTask;
+    private Task? _verifyRecentTask;
     private bool _disposed;
     private readonly ConcurrentDictionary<string, byte> _pendingUploads = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, int> _retryCounts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (string FilePath, DateTime QueuedAt)> _recentUploads = new(StringComparer.OrdinalIgnoreCase);
+    private const int MaxRequeueRetries = 3;
 
     public bool IsEnabled => _config.GetValueOrDefault(nameof(StaticFilesServerConfiguration.ScalewayEnabled), false);
 
@@ -41,7 +45,8 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
         InitializeS3Client();
         _processingTask = ProcessUploadQueueAsync(_cts.Token);
         _periodicScanTask = PeriodicSyncScanAsync(_cts.Token);
-        _logger.LogInformation("Scaleway storage service started (sync scan at startup + every 5 minutes)");
+        _verifyRecentTask = VerifyRecentUploadsLoopAsync(_cts.Token);
+        _logger.LogInformation("Scaleway storage service started (sync scan at startup + every 5 minutes, recent uploads verification every 30s)");
         return Task.CompletedTask;
     }
 
@@ -54,6 +59,7 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
         var tasks = new List<Task>();
         if (_processingTask != null) tasks.Add(_processingTask);
         if (_periodicScanTask != null) tasks.Add(_periodicScanTask);
+        if (_verifyRecentTask != null) tasks.Add(_verifyRecentTask);
 
         try
         {
@@ -89,7 +95,8 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
 
         _uploadQueue.Enqueue((hash, filePath));
         _pendingUploads.TryAdd(hash, 0);
-        _logger.LogDebug("Queued file {Hash} for Scaleway upload, queue size: {Size}", hash, _uploadQueue.Count);
+        _recentUploads[hash] = (filePath, DateTime.UtcNow);
+        _logger.LogInformation("Queued file {Hash} for S3 upload, queue size: {Size}", hash, _uploadQueue.Count);
     }
 
     public async Task<bool> FileExistsAsync(string hash, long expectedSize, CancellationToken ct = default)
@@ -176,6 +183,9 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
             if (!File.Exists(filePath))
             {
                 _logger.LogWarning("File {FilePath} no longer exists, skipping upload", filePath);
+                _pendingUploads.TryRemove(hash, out _);
+                _retryCounts.TryRemove(hash, out _);
+                _recentUploads.TryRemove(hash, out _);
                 return;
             }
 
@@ -183,10 +193,16 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
             if (await FileExistsAsync(hash, localSize, ct).ConfigureAwait(false))
             {
                 _logger.LogDebug("File {Hash} already exists on S3 with correct size, skipping upload", hash);
+                _pendingUploads.TryRemove(hash, out _);
+                _retryCounts.TryRemove(hash, out _);
+                _recentUploads.TryRemove(hash, out _);
                 return;
             }
 
             await UploadFileAsync(hash, filePath, ct).ConfigureAwait(false);
+            _pendingUploads.TryRemove(hash, out _);
+            _retryCounts.TryRemove(hash, out _);
+            _recentUploads.TryRemove(hash, out _);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -194,11 +210,29 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "S3 upload check/upload failed for {Hash}, re-queuing for next sync scan", hash);
-        }
-        finally
-        {
-            _pendingUploads.TryRemove(hash, out _);
+            var retryCount = _retryCounts.AddOrUpdate(hash, 1, (_, count) => count + 1);
+
+            if (retryCount <= MaxRequeueRetries)
+            {
+                _logger.LogWarning(ex, "S3 upload failed for {Hash} (attempt {Attempt}/{Max}), re-queuing in 10s",
+                    hash, retryCount, MaxRequeueRetries);
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(10 * retryCount), ct).ConfigureAwait(false);
+                        _uploadQueue.Enqueue((hash, filePath));
+                    }
+                    catch (OperationCanceledException) { }
+                }, CancellationToken.None);
+            }
+            else
+            {
+                _logger.LogError(ex, "S3 upload permanently failed for {Hash} after {Max} re-queues, giving up (verification loop will retry later)",
+                    hash, MaxRequeueRetries);
+                _pendingUploads.TryRemove(hash, out _);
+                _retryCounts.TryRemove(hash, out _);
+            }
         }
     }
 
@@ -263,7 +297,7 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
                 }
                 else
                 {
-                    _logger.LogError("S3 upload abandoned: {Hash} after {MaxRetries} attempts (upload succeeds but verification fails)", hash, maxRetries);
+                    throw new InvalidOperationException($"S3 upload for {hash} succeeded but HEAD verification failed after {maxRetries} attempts");
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -277,9 +311,105 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
                 }
                 else
                 {
-                    _logger.LogError(ex, "S3 upload abandoned: {Hash} after {MaxRetries} attempts", hash, maxRetries);
+                    throw;
                 }
             }
+        }
+    }
+
+
+    private async Task VerifyRecentUploadsLoopAsync(CancellationToken ct)
+    {
+        try { await Task.Delay(TimeSpan.FromSeconds(15), ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await VerifyRecentUploadsAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during recent uploads verification");
+            }
+
+            try { await Task.Delay(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { break; }
+        }
+    }
+
+    private async Task VerifyRecentUploadsAsync(CancellationToken ct)
+    {
+        if (_s3Client == null || _recentUploads.IsEmpty) return;
+
+        var now = DateTime.UtcNow;
+        int verified = 0;
+        int requeued = 0;
+        int expired = 0;
+
+        foreach (var kvp in _recentUploads)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var hash = kvp.Key;
+            var (filePath, queuedAt) = kvp.Value;
+            var age = now - queuedAt;
+
+            // Laisser le temps au pipeline d'upload de finir
+            if (age < TimeSpan.FromSeconds(20))
+                continue;
+
+            // Trop vieux : le scan périodique prendra le relais
+            if (age > TimeSpan.FromMinutes(10))
+            {
+                _recentUploads.TryRemove(hash, out _);
+                expired++;
+                continue;
+            }
+
+            // Encore dans le pipeline d'upload, ne pas interférer
+            if (_pendingUploads.ContainsKey(hash))
+                continue;
+
+            // Vérifier si le fichier existe toujours sur disque
+            if (!File.Exists(filePath))
+            {
+                _recentUploads.TryRemove(hash, out _);
+                continue;
+            }
+
+            var localSize = new FileInfo(filePath).Length;
+            try
+            {
+                if (await FileExistsAsync(hash, localSize, ct).ConfigureAwait(false))
+                {
+                    _recentUploads.TryRemove(hash, out _);
+                    verified++;
+                }
+                else
+                {
+                    _logger.LogWarning("Verify: file {Hash} not found on S3 ({Age}s after queue), re-queuing",
+                        hash, (int)age.TotalSeconds);
+                    _retryCounts.TryRemove(hash, out _);
+                    QueueUpload(hash, filePath);
+                    requeued++;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Verify: HEAD check failed for {Hash}", hash);
+            }
+        }
+
+        if (verified > 0 || requeued > 0)
+        {
+            _logger.LogInformation("Verify recent uploads: {Verified} confirmed on S3, {Requeued} re-queued, {Expired} expired, {Remaining} still tracking",
+                verified, requeued, expired, _recentUploads.Count);
         }
     }
 
@@ -329,6 +459,7 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
 
         // Récupérer tous les objets présents sur S3 avec leurs tailles
         var s3Objects = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        bool listingSucceeded = false;
         try
         {
             string? continuationToken = null;
@@ -344,7 +475,6 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
                 var response = await _s3Client.ListObjectsV2Async(listRequest, ct).ConfigureAwait(false);
                 foreach (var obj in response.S3Objects)
                 {
-                    // La clé est au format "{char}/{hash}", extraire le hash
                     var slashIdx = obj.Key.IndexOf('/');
                     var hash = slashIdx >= 0 ? obj.Key[(slashIdx + 1)..] : obj.Key;
                     s3Objects[hash] = obj.Size;
@@ -352,22 +482,27 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
 
                 continuationToken = response.IsTruncated ? response.NextContinuationToken : null;
             } while (continuationToken != null);
+
+            listingSucceeded = true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to list S3 objects during sync scan");
-            return;
+            _logger.LogError(ex, "Failed to list S3 objects during sync scan, falling back to individual HEAD checks");
         }
 
-        _logger.LogInformation("S3 sync scan: {S3Count} objects found on S3", s3Objects.Count);
+        if (listingSucceeded)
+        {
+            _logger.LogInformation("S3 sync scan: {S3Count} objects found on S3", s3Objects.Count);
+        }
 
-        // Scanner les fichiers locaux et comparer existence + taille
         int totalScanned = 0;
         int missing = 0;
         int sizeMismatch = 0;
         int inSync = 0;
         int skippedTemp = 0;
         int skippedPending = 0;
+        int headChecked = 0;
+        const int maxHeadChecksOnFallback = 50;
 
         foreach (var subDir in Directory.EnumerateDirectories(cacheDir))
         {
@@ -379,7 +514,6 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
 
                 var hash = Path.GetFileName(filePath);
 
-                // Ignorer les fichiers temporaires (uploads en cours)
                 if (hash.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)
                     || hash.EndsWith(".dl", StringComparison.OrdinalIgnoreCase))
                 {
@@ -395,31 +529,74 @@ public sealed class ScalewayStorageService : IHostedService, IDisposable
                     continue;
                 }
 
-                if (!s3Objects.TryGetValue(hash, out var s3Size))
+                if (listingSucceeded)
                 {
-                    missing++;
-                    QueueUpload(hash, filePath);
-                    continue;
-                }
+                    if (!s3Objects.TryGetValue(hash, out var s3Size))
+                    {
+                        missing++;
+                        _retryCounts.TryRemove(hash, out _);
+                        QueueUpload(hash, filePath);
+                        continue;
+                    }
 
-                var localSize = new FileInfo(filePath).Length;
-                if (s3Size != localSize)
+                    var localSize = new FileInfo(filePath).Length;
+                    if (s3Size != localSize)
+                    {
+                        sizeMismatch++;
+                        _logger.LogWarning("S3 sync scan: size mismatch for {Hash} (local: {LocalSize} bytes, S3: {S3Size} bytes), re-queuing",
+                            hash, localSize, s3Size);
+                        _retryCounts.TryRemove(hash, out _);
+                        QueueUpload(hash, filePath);
+                        continue;
+                    }
+
+                    _retryCounts.TryRemove(hash, out _);
+                    _recentUploads.TryRemove(hash, out _);
+                    inSync++;
+                }
+                else
                 {
-                    sizeMismatch++;
-                    _logger.LogWarning("S3 sync scan: size mismatch for {Hash} (local: {LocalSize} bytes, S3: {S3Size} bytes), re-queuing",
-                        hash, localSize, s3Size);
-                    QueueUpload(hash, filePath);
-                    continue;
-                }
+                    if (headChecked >= maxHeadChecksOnFallback)
+                        continue;
 
-                inSync++;
+                    var localSize = new FileInfo(filePath).Length;
+                    try
+                    {
+                        headChecked++;
+                        if (!await FileExistsAsync(hash, localSize, ct).ConfigureAwait(false))
+                        {
+                            missing++;
+                            _retryCounts.TryRemove(hash, out _);
+                            QueueUpload(hash, filePath);
+                        }
+                        else
+                        {
+                            _retryCounts.TryRemove(hash, out _);
+                            _recentUploads.TryRemove(hash, out _);
+                            inSync++;
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(ex, "HEAD check failed for {Hash} during fallback scan", hash);
+                    }
+                }
             }
         }
 
         var queued = missing + sizeMismatch;
-        _logger.LogInformation(
-            "S3 sync scan complete: {Total} files scanned, {InSync} in sync, {Missing} missing, {SizeMismatch} size mismatch, {SkippedTemp} temp skipped, {SkippedPending} pending skipped, {Queued} queued for upload",
-            totalScanned, inSync, missing, sizeMismatch, skippedTemp, skippedPending, queued);
+        if (!listingSucceeded)
+        {
+            _logger.LogInformation(
+                "S3 sync scan complete (fallback HEAD mode): {Total} files scanned, {InSync} in sync, {Missing} missing, {HeadChecked}/{MaxHead} HEAD checks used, {SkippedTemp} temp skipped, {SkippedPending} pending skipped, {Queued} queued for upload",
+                totalScanned, inSync, missing, headChecked, maxHeadChecksOnFallback, skippedTemp, skippedPending, queued);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "S3 sync scan complete: {Total} files scanned, {InSync} in sync, {Missing} missing, {SizeMismatch} size mismatch, {SkippedTemp} temp skipped, {SkippedPending} pending skipped, {Queued} queued for upload",
+                totalScanned, inSync, missing, sizeMismatch, skippedTemp, skippedPending, queued);
+        }
     }
 
     public async Task<int> DeleteS3ObjectsAsync(IEnumerable<string> hashes, CancellationToken ct)
