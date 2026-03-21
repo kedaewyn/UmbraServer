@@ -36,7 +36,7 @@ public partial class MareHub
             IsPublic = request.IsPublic,
             LogoImageBase64 = request.LogoImageBase64,
             BannerImageBase64 = request.BannerImageBase64,
-            ManagerUID = request.ManagerUID ?? UserUID,
+            ManagerRpProfileId = request.ManagerRpProfileId,
             ShowManagerOnProfile = true,
             CreatedUtc = now,
             UpdatedUtc = now,
@@ -84,7 +84,7 @@ public partial class MareHub
         establishment.IsPublic = request.IsPublic;
         establishment.LogoImageBase64 = request.LogoImageBase64;
         establishment.BannerImageBase64 = request.BannerImageBase64;
-        establishment.ManagerUID = request.ManagerUID;
+        establishment.ManagerRpProfileId = request.ManagerRpProfileId;
         establishment.ShowManagerOnProfile = request.ShowManagerOnProfile;
         establishment.UpdatedUtc = DateTime.UtcNow;
 
@@ -134,6 +134,7 @@ public partial class MareHub
         var establishment = await DbContext.Establishments
             .Include(e => e.Owner)
             .Include(e => e.Events)
+            .Include(e => e.ManagerRpProfile)
             .AsNoTracking()
             .FirstOrDefaultAsync(e => e.Id == id)
             .ConfigureAwait(false);
@@ -152,6 +153,7 @@ public partial class MareHub
         var query = DbContext.Establishments
             .Include(e => e.Owner)
             .Include(e => e.Events)
+            .Include(e => e.ManagerRpProfile)
             .AsNoTracking()
             .Where(e => e.IsPublic);
 
@@ -200,6 +202,7 @@ public partial class MareHub
         var query = DbContext.Establishments
             .Include(e => e.Owner)
             .Include(e => e.Events)
+            .Include(e => e.ManagerRpProfile)
             .AsNoTracking()
             .Where(e => e.IsPublic && e.TerritoryId == request.TerritoryId);
 
@@ -251,6 +254,7 @@ public partial class MareHub
         var establishments = await DbContext.Establishments
             .Include(e => e.Owner)
             .Include(e => e.Events)
+            .Include(e => e.ManagerRpProfile)
             .AsNoTracking()
             .Where(e => e.OwnerUID == UserUID)
             .OrderByDescending(e => e.UpdatedUtc)
@@ -258,6 +262,28 @@ public partial class MareHub
             .ConfigureAwait(false);
 
         return establishments.Select(e => e.ToEstablishmentDto(UserUID)).ToList();
+    }
+
+    [Authorize(Policy = "Identified")]
+    public async Task<List<RpProfileSummaryDto>> EstablishmentGetOwnRpProfiles()
+    {
+        _logger.LogCallInfo();
+
+        var profiles = await DbContext.Set<CharacterRpProfileData>()
+            .AsNoTracking()
+            .Where(p => p.UserUID == UserUID)
+            .Select(p => new RpProfileSummaryDto
+            {
+                Id = p.Id,
+                CharacterName = p.CharacterName,
+                WorldId = p.WorldId,
+                RpFirstName = p.RpFirstName,
+                RpLastName = p.RpLastName
+            })
+            .ToListAsync()
+            .ConfigureAwait(false);
+
+        return profiles;
     }
 
     [Authorize(Policy = "Identified")]
